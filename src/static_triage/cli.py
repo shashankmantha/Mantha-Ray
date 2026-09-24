@@ -1,4 +1,4 @@
-"""Command-line interface for the static triage scanner."""
+"""Command-line interface for Mantha Ray."""
 
 from __future__ import annotations
 
@@ -13,14 +13,16 @@ from .errors import TriageError
 from .scanner import run_inventory_scan
 
 
-def build_parser() -> argparse.ArgumentParser:
+def build_parser(
+    prog: str = "static-triage",
+) -> argparse.ArgumentParser:
     """Construct the command-line argument parser."""
 
     parser = argparse.ArgumentParser(
-        prog="static-triage",
+        prog=prog,
         description=(
-            "Inventory and hash an extracted staging "
-            "directory without executing samples."
+            "Inventory and analyze files without "
+            "executing samples."
         ),
     )
 
@@ -37,7 +39,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     scan = subparsers.add_parser(
         "scan",
-        help="run the current scanner milestone",
+        help="run the container scanner",
     )
 
     scan.add_argument(
@@ -86,79 +88,163 @@ def build_parser() -> argparse.ArgumentParser:
 
     gui = subparsers.add_parser(
         "gui",
-        help="launch the desktop scanner interface",
+        help="launch the Tkinter interface",
     )
 
     gui.add_argument(
         "--container-engine",
         default="docker",
-        help="container engine command (default: docker)",
+        help=(
+            "container engine command "
+            "(default: docker)"
+        ),
     )
 
     gui.add_argument(
         "--image",
         default="static-triage:core",
-        help="analysis worker image (default: static-triage:core)",
+        help=(
+            "analysis worker image "
+            "(default: static-triage:core)"
+        ),
+    )
+
+    web = subparsers.add_parser(
+        "web",
+        help="launch the local Mantha Ray web interface",
+    )
+
+    web.add_argument(
+        "--container-engine",
+        default="docker",
+        help=(
+            "container engine command "
+            "(default: docker)"
+        ),
+    )
+
+    web.add_argument(
+        "--image",
+        default="static-triage:core",
+        help=(
+            "analysis worker image "
+            "(default: static-triage:core)"
+        ),
+    )
+
+    web.add_argument(
+        "--port",
+        type=int,
+        default=0,
+        help=(
+            "loopback port; zero chooses a "
+            "random available port"
+        ),
+    )
+
+    web.add_argument(
+        "--no-browser",
+        action="store_true",
+        help=(
+            "print the authenticated URL instead "
+            "of opening it"
+        ),
     )
 
     return parser
 
 
-def _run_gui(args: argparse.Namespace) -> int:
-    """Import and launch Tkinter only for the GUI subcommand."""
+def _print_error(
+    message: str,
+) -> int:
+    """Print a bounded CLI error response."""
+
+    print(
+        json.dumps(
+            {
+                "ok": False,
+                "error": message,
+            }
+        ),
+        file=sys.stderr,
+    )
+
+    return 2
+
+
+def _run_gui(
+    args: argparse.Namespace,
+) -> int:
+    """Import Tkinter only for the GUI subcommand."""
 
     try:
         from .gui import launch_gui
+
     except ModuleNotFoundError as exc:
         if exc.name != "tkinter":
             raise
 
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": (
-                        "Tkinter is required to launch the GUI."
-                    ),
-                }
-            ),
-            file=sys.stderr,
+        return _print_error(
+            "Tkinter is required to launch the GUI."
         )
-        return 2
 
     try:
         return launch_gui(
             engine=args.container_engine,
             image=args.image,
         )
+
     except RuntimeError as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                }
-            ),
-            file=sys.stderr,
+        return _print_error(str(exc))
+
+
+def _run_web(
+    args: argparse.Namespace,
+) -> int:
+    """Launch the local browser application."""
+
+    from .web_launcher import launch_web
+
+    try:
+        return launch_web(
+            engine=args.container_engine,
+            image=args.image,
+            port=args.port,
+            open_browser=not args.no_browser,
         )
-        return 2
+
+    except RuntimeError as exc:
+        return _print_error(str(exc))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "static-triage",
+) -> int:
     """Run the command-line interface."""
 
-    args = build_parser().parse_args(argv)
+    args = build_parser(
+        prog=prog
+    ).parse_args(argv)
 
     if args.command == "gui":
         return _run_gui(args)
+
+    if args.command == "web":
+        return _run_web(args)
 
     if args.command != "scan":
         return 2
 
     limits = ScanLimits(
         max_file_count=args.max_files,
-        max_total_bytes=args.max_total_gib * 1024**3,
-        max_file_bytes=args.max_file_gib * 1024**3,
+        max_total_bytes=(
+            args.max_total_gib * 1024**3
+        ),
+        max_file_bytes=(
+            args.max_file_gib * 1024**3
+        ),
         max_depth=args.max_depth,
     )
 
@@ -174,18 +260,12 @@ def main(argv: list[str] | None = None) -> int:
             config,
         )
 
-    except (TriageError, ValueError, OSError) as exc:
-        print(
-            json.dumps(
-                {
-                    "ok": False,
-                    "error": str(exc),
-                }
-            ),
-            file=sys.stderr,
-        )
-
-        return 2
+    except (
+        TriageError,
+        ValueError,
+        OSError,
+    ) as exc:
+        return _print_error(str(exc))
 
     print(
         json.dumps(
@@ -196,13 +276,35 @@ def main(argv: list[str] | None = None) -> int:
                 "case_directory": str(
                     result.case_directory
                 ),
-                "report_path": str(result.report_path),
+                "report_path": str(
+                    result.report_path
+                ),
             },
             sort_keys=True,
         )
     )
 
     return 0
+
+
+def branded_main(
+    argv: list[str] | None = None,
+) -> int:
+    """Run Mantha Ray, opening the web app by default."""
+
+    arguments = list(
+        sys.argv[1:]
+        if argv is None
+        else argv
+    )
+
+    if not arguments:
+        arguments = ["web"]
+
+    return main(
+        arguments,
+        prog="mantha-ray",
+    )
 
 
 if __name__ == "__main__":

@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0"
+    />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Mantha Ray local static malware triage"
+    />
+    <title>Mantha Ray</title>
+    <script type="module" crossorigin src="./assets/index-7J3XL2KJ.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-DBZhXBYV.css">
+  </head>
+
+  <body>
+    <div class="app-shell">
+      <header class="app-header">
+        <a class="brand" href="#" aria-label="Mantha Ray home">
+          <span class="brand-mark" aria-hidden="true">MR</span>
+          <span>
+            <strong>Mantha Ray</strong>
+            <small>Static Malware Triage</small>
+          </span>
+        </a>
+
+        <div class="header-actions">
+          <span
+            id="service-badge"
+            class="status-chip status-muted"
+          >
+            Connecting
+          </span>
+          <button
+            id="new-scan"
+            class="btn btn-primary"
+            type="button"
+          >
+            New scan
+          </button>
+        </div>
+      </header>
+
+      <div class="workbench">
+        <aside class="scan-sidebar" aria-label="Scan sessions">
+          <div class="sidebar-heading">
+            <span>Scans</span>
+            <span id="scan-count">0</span>
+          </div>
+
+          <div id="scan-list" class="scan-list"></div>
+
+          <p id="scan-list-empty" class="sidebar-empty">
+            Completed and active scans will appear here.
+          </p>
+        </aside>
+
+        <main class="workspace-main">
+          <div
+            id="fatal-alert"
+            class="alert alert-danger d-none"
+            role="alert"
+          ></div>
+
+          <section
+            id="setup-view"
+            class="workspace-section"
+            aria-labelledby="scan-setup-title"
+          >
+            <div class="section-header">
+              <div>
+                <p class="section-label">New analysis</p>
+                <h1 id="scan-setup-title">Scan setup</h1>
+              </div>
+              <span class="security-note">Input mounted read-only</span>
+            </div>
+
+            <div class="form-stack">
+              <div>
+                <label for="source-path" class="form-label">
+                  Folder to scan
+                </label>
+                <div class="input-group">
+                  <input
+                    id="source-path"
+                    class="form-control"
+                    type="text"
+                    readonly
+                    placeholder="Choose a directory to analyze"
+                  />
+                  <button
+                    id="choose-source"
+                    class="btn btn-outline-info"
+                    type="button"
+                  >
+                    Choose folder
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label for="results-path" class="form-label">
+                  Save results in
+                </label>
+                <div class="input-group">
+                  <input
+                    id="results-path"
+                    class="form-control"
+                    type="text"
+                    readonly
+                  />
+                  <button
+                    id="choose-results"
+                    class="btn btn-outline-info"
+                    type="button"
+                  >
+                    Choose folder
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <div class="scan-actions">
+              <button
+                id="start-scan"
+                class="btn btn-primary"
+                type="button"
+              >
+                Start secure scan
+              </button>
+              <p class="pipeline-label">
+                Inventory <span>›</span> ClamAV <span>›</span>
+                capa <span>›</span> FLOSS <span>›</span> Report
+              </p>
+            </div>
+          </section>
+
+          <section id="scan-view" class="d-none">
+            <div class="scan-header">
+              <div>
+                <p class="section-label">Scan session</p>
+                <h1 id="scan-title">Scan</h1>
+                <p id="case-id" class="case-id"></p>
+              </div>
+
+              <div class="scan-header-actions">
+                <span
+                  id="verdict-badge"
+                  class="verdict verdict-muted"
+                >
+                  Queued
+                </span>
+                <button
+                  id="open-case"
+                  class="btn btn-outline-light d-none"
+                  type="button"
+                >
+                  Open case folder
+                </button>
+              </div>
+            </div>
+
+            <section id="progress-wrap" class="progress-panel d-none">
+              <div class="progress-copy">
+                <span id="progress-message">Preparing scan…</span>
+                <span id="progress-state" class="progress-state">
+                  QUEUED
+                </span>
+              </div>
+              <div
+                class="progress"
+                role="progressbar"
+                aria-label="Scan in progress"
+              >
+                <div
+                  class="progress-bar progress-bar-striped progress-bar-animated"
+                ></div>
+              </div>
+              <button
+                id="cancel-scan"
+                class="btn btn-outline-danger"
+                type="button"
+              >
+                Cancel scan
+              </button>
+            </section>
+
+            <section id="results-section" class="d-none">
+              <div class="metric-grid" aria-label="Scan summary">
+                <article class="metric-cell">
+                  <span>Regular files</span>
+                  <strong id="metric-files">—</strong>
+                </article>
+                <article class="metric-cell">
+                  <span>Files hashed</span>
+                  <strong id="metric-hashed">—</strong>
+                </article>
+                <article class="metric-cell">
+                  <span>capa matches</span>
+                  <strong id="metric-capa">—</strong>
+                </article>
+                <article class="metric-cell">
+                  <span>FLOSS strings</span>
+                  <strong id="metric-floss">—</strong>
+                </article>
+              </div>
+
+              <section class="results-block" aria-labelledby="stages-title">
+                <div class="block-heading">
+                  <h2 id="stages-title">Analysis stages</h2>
+                  <span id="coverage-label">Complete</span>
+                </div>
+                <div class="table-wrap">
+                  <table class="stage-table">
+                    <thead>
+                      <tr>
+                        <th>Stage</th>
+                        <th>Status</th>
+                        <th>Result</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      <tr>
+                        <td>Inventory</td>
+                        <td class="stage-good">Complete</td>
+                        <td id="inventory-summary">—</td>
+                      </tr>
+                      <tr>
+                        <td>ClamAV</td>
+                        <td id="clamav-status">—</td>
+                        <td id="clamav-summary">—</td>
+                      </tr>
+                      <tr>
+                        <td>capa</td>
+                        <td id="capa-status">—</td>
+                        <td id="capa-summary">—</td>
+                      </tr>
+                      <tr>
+                        <td>FLOSS</td>
+                        <td id="floss-status">—</td>
+                        <td id="floss-summary">—</td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section class="results-block output-block">
+                <div class="output-tabs" role="tablist" aria-label="Result output">
+                  <button
+                    class="output-tab active"
+                    data-panel="report-panel"
+                    type="button"
+                  >
+                    Report
+                  </button>
+                  <button
+                    class="output-tab"
+                    data-panel="activity-panel"
+                    type="button"
+                  >
+                    Activity
+                  </button>
+                  <button
+                    class="output-tab"
+                    data-panel="json-panel"
+                    type="button"
+                  >
+                    JSON
+                  </button>
+                </div>
+
+                <pre id="report-panel" class="output-panel"></pre>
+                <pre
+                  id="activity-panel"
+                  class="output-panel d-none"
+                ></pre>
+                <pre
+                  id="json-panel"
+                  class="output-panel d-none"
+                ></pre>
+              </section>
+            </section>
+          </section>
+        </main>
+      </div>
+    </div>
+
+  </body>
+</html>

@@ -10,8 +10,27 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = []
 
+[project.optional-dependencies]
+web = [
+    "fastapi>=0.115,<1",
+    "uvicorn>=0.34,<1",
+]
+
+desktop = [
+    "fastapi>=0.115,<1",
+    "pywebview[qt]>=6.2,<7",
+    "uvicorn>=0.34,<1",
+]
+
 [project.scripts]
 static-triage = "static_triage.cli:main"
+mantha-ray = "static_triage.cli:branded_main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+static_triage = [
+    "web_dist/*",
+    "web_dist/assets/*",
+]
