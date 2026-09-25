@@ -116,7 +116,7 @@ Access to the Docker daemon is security-sensitive. Membership in the Docker grou
 Clone the repository:
 
 ```bash
-git clone git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
+git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
 cd Mantha-Ray
 ```
 
