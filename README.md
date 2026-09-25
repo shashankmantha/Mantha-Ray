@@ -117,7 +117,7 @@ Clone the repository:
 
 ```bash
 git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
-cd Mantha-Ray
+cd malware-scanner
 ```
 
 Create and activate a Python virtual environment:
