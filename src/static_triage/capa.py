@@ -19,6 +19,13 @@ from .models import (
     RoutingClass,
 )
 
+from .capa_risk import (
+    CapabilityRisk,
+    CapaRiskSummary,
+    assess_capability,
+    summarize_risk,
+)
+
 class CapaBatchStatus(str, Enum):
     """Normalized outcome of the complete capa stage."""
 
@@ -43,6 +50,16 @@ class CapaCapability:
     attack_ids: tuple[str, ...]
     mbc_ids: tuple[str, ...]
 
+    @property
+    def risk(self) -> CapabilityRisk:
+        """Return the deterministic risk contribution for this rule."""
+
+        return assess_capability(
+            self.name,
+            self.namespace,
+            self.match_count,
+        )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "name": self.name,
@@ -50,6 +67,7 @@ class CapaCapability:
             "match_count": self.match_count,
             "attack_ids": list(self.attack_ids),
             "mbc_ids": list(self.mbc_ids),
+            "risk": self.risk.to_dict(),
         }
 
 
@@ -80,11 +98,22 @@ class CapaResult:
                 capability.to_dict()
                 for capability in self.capabilities
             ],
+            "risk": self.risk.to_dict(),
             "timed_out": self.timed_out,
             "output_truncated": self.output_truncated,
             "duration_seconds": self.duration_seconds,
             "error": self.error,
+            
         }
+    
+    @property
+    def risk(self) -> CapaRiskSummary:
+        """Summarize unique capa capabilities for this file."""
+
+        return summarize_risk(
+            capability.risk
+            for capability in self.capabilities
+        )
 
 @dataclass(frozen=True, slots=True)
 class CapaBatchResult:
@@ -116,6 +145,7 @@ class CapaBatchResult:
                 len(result.capabilities)
                 for result in self.results
             ),
+            "risk": self.risk.to_dict(),
             "results": [
                 result.to_dict()
                 for result in self.results
@@ -123,6 +153,16 @@ class CapaBatchResult:
             "duration_seconds": self.duration_seconds,
             "error": self.error,
         }
+    
+    @property
+    def risk(self) -> CapaRiskSummary:
+        """Summarize unique capabilities across the analyzed case."""
+
+        return summarize_risk(
+            capability.risk
+            for result in self.results
+            for capability in result.capabilities
+        )
     
 @dataclass(frozen=True, slots=True)
 class CapaSelection:

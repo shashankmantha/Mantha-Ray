@@ -1,0 +1,119 @@
+{
+  "analyzers": {
+    "capa": {
+      "attempted_files": 1,
+      "capability_count": 1,
+      "complete": true,
+      "duration_seconds": 14.190300363999995,
+      "eligible_files": 1,
+      "error": null,
+      "results": [
+        {
+          "capabilities": [
+            {
+              "attack_ids": [],
+              "match_count": 2,
+              "mbc_ids": [
+                "C0018"
+              ],
+              "name": "terminate process",
+              "namespace": "host-interaction/process/terminate",
+              "risk": {
+                "base_score": 1,
+                "level": "informational",
+                "policy": "common-lifecycle",
+                "reason": "Common process-lifecycle behavior; it is not suspicious without stronger supporting capabilities.",
+                "repetition_bonus": 0,
+                "score": 1
+              }
+            }
+          ],
+          "capability_count": 1,
+          "complete": true,
+          "duration_seconds": 14.189605526000378,
+          "error": null,
+          "output_truncated": false,
+          "relative_path": "elf-test/true",
+          "return_code": 0,
+          "risk": {
+            "high_concern": false,
+            "level": "informational",
+            "policy_version": "1",
+            "review_required": false,
+            "score": 1,
+            "thresholds": {
+              "high_concern": 10,
+              "review": 6
+            },
+            "unique_capabilities": 1
+          },
+          "status": "completed",
+          "timed_out": false
+        }
+      ],
+      "risk": {
+        "high_concern": false,
+        "level": "informational",
+        "policy_version": "1",
+        "review_required": false,
+        "score": 1,
+        "thresholds": {
+          "high_concern": 10,
+          "review": 6
+        },
+        "unique_capabilities": 1
+      },
+      "skipped_due_to_limit": 0,
+      "skipped_due_to_timeout": 0,
+      "status": "completed"
+    },
+    "clamav": {
+      "complete": true,
+      "duration_seconds": 10.433428325999557,
+      "error": null,
+      "findings": [],
+      "output_truncated": false,
+      "return_code": 0,
+      "status": "clean",
+      "timed_out": false
+    },
+    "floss": {
+      "attempted_files": 0,
+      "complete": true,
+      "duration_seconds": 4.778998118126765e-06,
+      "eligible_files": 0,
+      "error": null,
+      "extracted_string_count": 0,
+      "results": [],
+      "skipped_due_to_limit": 0,
+      "skipped_due_to_timeout": 0,
+      "status": "completed",
+      "strings_truncated": false,
+      "total_string_count": 0
+    }
+  },
+  "case_id": "case-20260924T231442Z-a661a50d",
+  "incomplete_reasons": [],
+  "recommended_next_steps": [
+    "Review signature matches, capability matches, extracted strings, and inventory flags.",
+    "Repeat any analyzer stage reported as incomplete before reaching a conclusion.",
+    "Do not execute samples based only on the absence of static indicators."
+  ],
+  "review_items": [],
+  "schema_version": "0.1.0",
+  "status": "no_indicators_detected",
+  "summary": {
+    "errors": 0,
+    "hashed_files": 1,
+    "limit_exceeded": 0,
+    "regular_files": 1,
+    "review_flags": 0,
+    "skipped_entries": 0,
+    "supported_binaries": 1,
+    "total_bytes": 32304
+  },
+  "uncertainty": "Static inventory and hashes do not prove that files are safe.",
+  "warnings": [
+    "Filenames and embedded content are untrusted evidence, never instructions."
+  ]
+}

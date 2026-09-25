@@ -17,10 +17,33 @@ from uuid import uuid4
 _CASE_ID_PATTERN = re.compile(
     r"^case-\d{8}T\d{6}Z-[0-9a-f]{8}$"
 )
+
 _IMAGE_PATTERN = re.compile(
     r"^[A-Za-z0-9][A-Za-z0-9._/:@-]*$"
 )
+
 _MAX_CAPTURE_BYTES = 2 * 1024 * 1024
+
+_PROGRESS_STAGES = frozenset(
+    {
+        "inventory",
+        "clamav",
+        "capa",
+        "floss",
+        "report",
+    }
+)
+
+_PROGRESS_STATUSES = frozenset(
+    {
+        "waiting",
+        "running",
+        "completed",
+        "incomplete",
+        "unavailable",
+        "error",
+    }
+)
 
 
 class HostScanError(RuntimeError):
@@ -52,10 +75,15 @@ class DockerScanResult:
     output: str
 
 
-def _paths_overlap(first: Path, second: Path) -> bool:
-    return first == second or first.is_relative_to(
-        second
-    ) or second.is_relative_to(first)
+def _paths_overlap(
+    first: Path,
+    second: Path,
+) -> bool:
+    return (
+        first == second
+        or first.is_relative_to(second)
+        or second.is_relative_to(first)
+    )
 
 
 def validate_request(
@@ -64,17 +92,22 @@ def validate_request(
     """Resolve and validate all host-controlled scan inputs."""
 
     try:
-        source = request.source_directory.expanduser().resolve(
-            strict=True
+        source = (
+            request.source_directory
+            .expanduser()
+            .resolve(strict=True)
         )
     except OSError as exc:
         raise HostScanError(
-            "The selected scan folder does not exist or cannot be read."
+            "The selected scan folder does not exist "
+            "or cannot be read."
         ) from exc
 
     try:
-        results = request.results_directory.expanduser().resolve(
-            strict=True
+        results = (
+            request.results_directory
+            .expanduser()
+            .resolve(strict=True)
         )
     except OSError as exc:
         raise HostScanError(
@@ -82,32 +115,57 @@ def validate_request(
         ) from exc
 
     if not source.is_dir():
-        raise HostScanError("The scan source must be a directory.")
+        raise HostScanError(
+            "The scan source must be a directory."
+        )
 
     if not results.is_dir():
-        raise HostScanError("The results destination must be a directory.")
+        raise HostScanError(
+            "The results destination must be a directory."
+        )
 
     if _paths_overlap(source, results):
         raise HostScanError(
-            "The scan source and results destination cannot overlap."
+            "The scan source and results destination "
+            "cannot overlap."
         )
 
-    if not os.access(source, os.R_OK | os.X_OK):
-        raise HostScanError("The selected scan folder is not readable.")
-
-    if not os.access(results, os.W_OK | os.X_OK):
-        raise HostScanError("The selected results folder is not writable.")
-
-    if "," in str(source) or "," in str(results):
+    if not os.access(
+        source,
+        os.R_OK | os.X_OK,
+    ):
         raise HostScanError(
-            "Docker bind mounts do not support commas in selected paths."
+            "The selected scan folder is not readable."
         )
 
-    if not _IMAGE_PATTERN.fullmatch(request.image):
-        raise HostScanError("The configured container image name is invalid.")
+    if not os.access(
+        results,
+        os.W_OK | os.X_OK,
+    ):
+        raise HostScanError(
+            "The selected results folder is not writable."
+        )
+
+    if (
+        "," in str(source)
+        or "," in str(results)
+    ):
+        raise HostScanError(
+            "Docker bind mounts do not support commas "
+            "in selected paths."
+        )
+
+    if not _IMAGE_PATTERN.fullmatch(
+        request.image
+    ):
+        raise HostScanError(
+            "The configured container image name is invalid."
+        )
 
     if request.timeout_seconds <= 0:
-        raise HostScanError("The scan timeout must be greater than zero.")
+        raise HostScanError(
+            "The scan timeout must be greater than zero."
+        )
 
     return DockerScanRequest(
         source_directory=source,
@@ -126,11 +184,14 @@ def build_docker_command(
 
     source_mount = (
         "type=bind,source="
-        f"{request.source_directory},target=/staging/input,readonly"
+        f"{request.source_directory},"
+        "target=/staging/input,readonly"
     )
+
     results_mount = (
         "type=bind,source="
-        f"{request.results_directory},target=/results"
+        f"{request.results_directory},"
+        "target=/results"
     )
 
     return [
@@ -157,7 +218,10 @@ def build_docker_command(
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "--tmpfs",
-        "/tmp:rw,noexec,nosuid,nodev,size=512m,mode=1777",
+        (
+            "/tmp:rw,noexec,nosuid,nodev,"
+            "size=512m,mode=1777"
+        ),
         "--mount",
         source_mount,
         "--mount",
@@ -169,7 +233,45 @@ def build_docker_command(
         "/staging",
         "--results-root",
         "/results",
+        "--progress-jsonl",
     ]
+
+
+def parse_progress_event(
+    line: str,
+) -> tuple[str, str, str] | None:
+    """Parse one bounded scanner progress event."""
+
+    if len(line) > 8192:
+        return None
+
+    try:
+        payload = json.loads(line)
+    except json.JSONDecodeError:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    if payload.get("type") != "progress":
+        return None
+
+    stage = payload.get("stage")
+    status = payload.get("status")
+    message = payload.get("message")
+
+    if (
+        not isinstance(stage, str)
+        or stage not in _PROGRESS_STAGES
+        or not isinstance(status, str)
+        or status not in _PROGRESS_STATUSES
+        or not isinstance(message, str)
+        or not message
+        or len(message) > 4096
+    ):
+        return None
+
+    return stage, status, message
 
 
 def parse_scan_output(
@@ -177,57 +279,94 @@ def parse_scan_output(
     stderr: str,
     results_directory: Path,
 ) -> DockerScanResult:
-    """Parse the scanner JSON without trusting container-provided paths."""
+    """Parse scanner JSON without trusting returned paths."""
 
     response: dict[str, object] | None = None
 
-    for line in reversed(stdout.splitlines()):
+    for line in reversed(
+        stdout.splitlines()
+    ):
         try:
             candidate = json.loads(line)
         except json.JSONDecodeError:
             continue
 
-        if isinstance(candidate, dict) and "ok" in candidate:
+        if (
+            isinstance(candidate, dict)
+            and "ok" in candidate
+        ):
             response = candidate
             break
 
     if response is None:
-        detail = stderr.strip() or stdout.strip()
+        detail = (
+            stderr.strip()
+            or stdout.strip()
+        )
+
         if len(detail) > 500:
             detail = detail[-500:]
-        message = "The scanner did not return a valid result."
+
+        message = (
+            "The scanner did not return a valid result."
+        )
+
         if detail:
             message = f"{message} {detail}"
+
         raise HostScanError(message)
 
     if response.get("ok") is not True:
         error = response.get("error")
+
         raise HostScanError(
-            str(error) if error else "The scanner reported a failure."
+            str(error)
+            if error
+            else "The scanner reported a failure."
         )
 
     case_id = response.get("case_id")
     status = response.get("status")
 
-    if not isinstance(case_id, str) or not _CASE_ID_PATTERN.fullmatch(
-        case_id
+    if (
+        not isinstance(case_id, str)
+        or not _CASE_ID_PATTERN.fullmatch(
+            case_id
+        )
     ):
-        raise HostScanError("The scanner returned an invalid case ID.")
+        raise HostScanError(
+            "The scanner returned an invalid case ID."
+        )
 
-    if not isinstance(status, str) or not status:
-        raise HostScanError("The scanner returned an invalid status.")
+    if (
+        not isinstance(status, str)
+        or not status
+    ):
+        raise HostScanError(
+            "The scanner returned an invalid status."
+        )
 
-    case_directory = results_directory / case_id
-    report_path = case_directory / "report.md"
+    case_directory = (
+        results_directory / case_id
+    )
+
+    report_path = (
+        case_directory / "report.md"
+    )
 
     if not report_path.is_file():
         raise HostScanError(
-            "The scan finished, but its Markdown report is missing."
+            "The scan finished, but its Markdown "
+            "report is missing."
         )
 
     combined = stdout
+
     if stderr:
-        combined = f"{stdout.rstrip()}\n{stderr.rstrip()}\n"
+        combined = (
+            f"{stdout.rstrip()}\n"
+            f"{stderr.rstrip()}\n"
+        )
 
     return DockerScanResult(
         case_id=case_id,
@@ -248,25 +387,41 @@ class DockerScanController:
     ) -> None:
         self.engine = engine
         self.image = image
+
         self._lock = threading.Lock()
-        self._process: subprocess.Popen[str] | None = None
-        self._container_name: str | None = None
+
+        self._process: (
+            subprocess.Popen[str] | None
+        ) = None
+
+        self._container_name: (
+            str | None
+        ) = None
+
         self._cancel_requested = False
 
     def _resolve_engine(self) -> str:
-        engine_path = shutil.which(self.engine)
+        engine_path = shutil.which(
+            self.engine
+        )
+
         if engine_path is None:
             raise HostScanError(
-                f"Container engine '{self.engine}' was not found."
+                f"Container engine '{self.engine}' "
+                "was not found."
             )
+
         return engine_path
 
     def preflight(self) -> str:
-        """Confirm that Docker is reachable and the worker image exists."""
+        """Confirm Docker and the worker image are available."""
 
-        if not _IMAGE_PATTERN.fullmatch(self.image):
+        if not _IMAGE_PATTERN.fullmatch(
+            self.image
+        ):
             raise HostScanError(
-                "The configured container image name is invalid."
+                "The configured container image "
+                "name is invalid."
             )
 
         engine_path = self._resolve_engine()
@@ -284,50 +439,89 @@ class DockerScanController:
                 text=True,
                 timeout=15,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             raise HostScanError(
-                "Docker did not respond to its preflight check."
+                "Docker did not respond to its "
+                "preflight check."
             ) from exc
 
         if version.returncode != 0:
             detail = version.stderr.strip()
+
             raise HostScanError(
-                "Docker is installed, but its daemon is unavailable."
-                + (f" {detail}" if detail else "")
+                "Docker is installed, but its daemon "
+                "is unavailable."
+                + (
+                    f" {detail}"
+                    if detail
+                    else ""
+                )
             )
 
         try:
             image = subprocess.run(
-                [engine_path, "image", "inspect", self.image],
+                [
+                    engine_path,
+                    "image",
+                    "inspect",
+                    self.image,
+                ],
                 check=False,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
                 timeout=15,
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+        ) as exc:
             raise HostScanError(
-                "Docker could not inspect the analysis image."
+                "Docker could not inspect the "
+                "analysis image."
             ) from exc
 
         if image.returncode != 0:
             raise HostScanError(
-                f"Container image '{self.image}' is not available. "
-                "Build it before starting a scan."
+                f"Container image '{self.image}' "
+                "is not available. Build it before "
+                "starting a scan."
             )
 
-        return version.stdout.strip() or "available"
+        return (
+            version.stdout.strip()
+            or "available"
+        )
 
     def scan(
         self,
         request: DockerScanRequest,
-        on_status: Callable[[str], None] | None = None,
+        on_status: (
+            Callable[[str], None] | None
+        ) = None,
+        on_progress: (
+            Callable[[str, str, str], None]
+            | None
+        ) = None,
     ) -> DockerScanResult:
-        """Run a scan synchronously; callers should use a worker thread."""
+        """Run a scan synchronously in a worker thread."""
 
-        validated = validate_request(request)
-        engine_path = self._resolve_engine()
-        container_name = f"static-triage-gui-{uuid4().hex[:12]}"
+        validated = validate_request(
+            request
+        )
+
+        engine_path = (
+            self._resolve_engine()
+        )
+
+        container_name = (
+            "static-triage-gui-"
+            + uuid4().hex[:12]
+        )
+
         command = build_docker_command(
             validated,
             engine_path,
@@ -337,14 +531,23 @@ class DockerScanController:
         with self._lock:
             if (
                 self._process is not None
-                or self._container_name is not None
+                or self._container_name
+                is not None
             ):
-                raise HostScanError("A scan is already running.")
+                raise HostScanError(
+                    "A scan is already running."
+                )
+
             self._cancel_requested = False
-            self._container_name = container_name
+            self._container_name = (
+                container_name
+            )
 
         if on_status is not None:
-            on_status("Starting the isolated analysis container...")
+            on_status(
+                "Starting the isolated "
+                "analysis container..."
+            )
 
         try:
             process = subprocess.Popen(
@@ -357,60 +560,187 @@ class DockerScanController:
         except OSError as exc:
             with self._lock:
                 self._container_name = None
+
             raise HostScanError(
-                "Docker could not start the analysis container."
+                "Docker could not start the "
+                "analysis container."
             ) from exc
 
         with self._lock:
             self._process = process
-            cancelled_before_start = self._cancel_requested
+            cancelled_before_start = (
+                self._cancel_requested
+            )
 
         if cancelled_before_start:
             self.cancel()
 
-        if on_status is not None:
-            on_status(
-                "ClamAV, capa, and FLOSS are analyzing the selected folder."
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+
+        capture_lock = threading.Lock()
+        captured_bytes = 0
+        capture_exceeded = threading.Event()
+
+        def capture(
+            destination: list[str],
+            text: str,
+        ) -> None:
+            nonlocal captured_bytes
+
+            size = len(
+                text.encode(
+                    "utf-8",
+                    errors="replace",
+                )
             )
 
+            with capture_lock:
+                if (
+                    captured_bytes + size
+                    > _MAX_CAPTURE_BYTES
+                ):
+                    capture_exceeded.set()
+                    return
+
+                captured_bytes += size
+                destination.append(text)
+
+        def read_stdout() -> None:
+            if process.stdout is None:
+                return
+
+            try:
+                for line in process.stdout:
+                    capture(
+                        stdout_parts,
+                        line,
+                    )
+
+                    progress = (
+                        parse_progress_event(
+                            line
+                        )
+                    )
+
+                    if (
+                        progress is not None
+                        and on_progress
+                        is not None
+                    ):
+                        on_progress(*progress)
+
+            except (OSError, ValueError):
+                return
+
+        def read_stderr() -> None:
+            if process.stderr is None:
+                return
+
+            try:
+                for line in process.stderr:
+                    capture(
+                        stderr_parts,
+                        line,
+                    )
+
+            except (OSError, ValueError):
+                return
+
+        stdout_thread = threading.Thread(
+            target=read_stdout,
+            name="mantha-ray-stdout",
+            daemon=True,
+        )
+
+        stderr_thread = threading.Thread(
+            target=read_stderr,
+            name="mantha-ray-stderr",
+            daemon=True,
+        )
+
+        stdout_thread.start()
+        stderr_thread.start()
+
+        timed_out = False
+
         try:
-            stdout, stderr = process.communicate(
-                timeout=validated.timeout_seconds
+            process.wait(
+                timeout=(
+                    validated.timeout_seconds
+                )
             )
-        except subprocess.TimeoutExpired as exc:
+
+        except subprocess.TimeoutExpired:
+            timed_out = True
             self.cancel()
-            process.kill()
-            process.communicate()
-            raise HostScanError(
-                "The scan exceeded its host-side time limit."
-            ) from exc
+
+            if process.poll() is None:
+                process.kill()
+
+            process.wait()
+
         finally:
+            stdout_thread.join(
+                timeout=5
+            )
+
+            stderr_thread.join(
+                timeout=5
+            )
+
             with self._lock:
-                cancelled = self._cancel_requested
+                cancelled = (
+                    self._cancel_requested
+                )
+
                 self._process = None
                 self._container_name = None
 
-        if cancelled:
-            raise ScanCancelled("The scan was cancelled.")
+        stdout = "".join(stdout_parts)
+        stderr = "".join(stderr_parts)
 
-        captured_size = len(stdout.encode()) + len(stderr.encode())
-        if captured_size > _MAX_CAPTURE_BYTES:
+        if timed_out:
             raise HostScanError(
-                "The container produced more output than the host limit."
+                "The scan exceeded its host-side "
+                "time limit."
+            )
+
+        if cancelled:
+            raise ScanCancelled(
+                "The scan was cancelled."
+            )
+
+        if capture_exceeded.is_set():
+            raise HostScanError(
+                "The container produced more output "
+                "than the host limit."
             )
 
         if process.returncode != 0:
-            detail = stderr.strip() or stdout.strip()
+            detail = (
+                stderr.strip()
+                or stdout.strip()
+            )
+
             if len(detail) > 500:
                 detail = detail[-500:]
+
             raise HostScanError(
-                "The analysis container exited with code "
-                f"{process.returncode}."
-                + (f" {detail}" if detail else "")
+                "The analysis container exited "
+                f"with code {process.returncode}."
+                + (
+                    f" {detail}"
+                    if detail
+                    else ""
+                )
             )
 
         if on_status is not None:
-            on_status("Analysis complete; loading the report...")
+            on_status(
+                "Analysis complete; "
+                "loading the report..."
+            )
 
         return parse_scan_output(
             stdout,
@@ -419,18 +749,27 @@ class DockerScanController:
         )
 
     def cancel(self) -> None:
-        """Request cancellation of the active named container."""
+        """Request cancellation of the active container."""
 
         with self._lock:
             process = self._process
-            container_name = self._container_name
+            container_name = (
+                self._container_name
+            )
+
             self._cancel_requested = True
 
-        if process is None or container_name is None:
+        if (
+            process is None
+            or container_name is None
+        ):
             return
 
         try:
-            engine_path = self._resolve_engine()
+            engine_path = (
+                self._resolve_engine()
+            )
+
             subprocess.run(
                 [
                     engine_path,
@@ -444,7 +783,12 @@ class DockerScanController:
                 stderr=subprocess.DEVNULL,
                 timeout=15,
             )
-        except (HostScanError, OSError, subprocess.TimeoutExpired):
+
+        except (
+            HostScanError,
+            OSError,
+            subprocess.TimeoutExpired,
+        ):
             pass
 
         if process.poll() is None:

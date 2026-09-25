@@ -162,6 +162,91 @@
             </div>
 
             <section id="progress-wrap" class="progress-panel d-none">
+                            <ol
+                id="stage-tracker"
+                class="stage-tracker"
+                aria-label="Analysis stage progress"
+              >
+                <li
+                  id="stage-inventory"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>Inventory</strong>
+                    <small id="stage-inventory-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+
+                <li
+                  id="stage-clamav"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>ClamAV</strong>
+                    <small id="stage-clamav-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+
+                <li
+                  id="stage-capa"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>capa</strong>
+                    <small id="stage-capa-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+
+                <li
+                  id="stage-floss"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>FLOSS</strong>
+                    <small id="stage-floss-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+
+                <li
+                  id="stage-report"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>Report</strong>
+                    <small id="stage-report-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+              </ol>
               <div class="progress-copy">
                 <span id="progress-message">Preparing scan…</span>
                 <span id="progress-state" class="progress-state">
@@ -205,6 +290,56 @@
                   <strong id="metric-floss">—</strong>
                 </article>
               </div>
+
+               <section
+                class="results-block artifact-block"
+                aria-labelledby="artifact-tree-title"
+              >
+                <div class="block-heading">
+                  <div>
+                    <h2 id="artifact-tree-title">Artifact tree</h2>
+                    <span id="artifact-count">
+                      0 files
+                    </span>
+                  </div>
+
+                  <div
+                    class="artifact-legend"
+                    aria-label="Artifact status legend"
+                  >
+                    <span class="risk-legend risk-high">
+                      High
+                    </span>
+                    <span class="risk-legend risk-medium">
+                      Medium
+                    </span>
+                    <span class="risk-legend risk-low">
+                      Low
+                    </span>
+                    <span class="risk-legend risk-clean">
+                      Clean
+                    </span>
+                  </div>
+                </div>
+
+                <div class="artifact-tree-header">
+                  <span>Artifact / path</span>
+                  <span>Analysis coverage</span>
+                  <span>Risk</span>
+                </div>
+
+                <div
+                  id="artifact-tree"
+                  class="artifact-tree"
+                ></div>
+
+                <p
+                  id="artifact-tree-empty"
+                  class="artifact-tree-empty d-none"
+                >
+                  No inventory artifacts were available.
+                </p>
+              </section>
 
               <section class="results-block" aria-labelledby="stages-title">
                 <div class="block-heading">

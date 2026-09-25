@@ -86,6 +86,14 @@ def build_parser(
         default=32,
     )
 
+    # Internal host/container protocol switch. Normal CLI callers still
+    # receive only the final JSON result unless this flag is supplied.
+    scan.add_argument(
+        "--progress-jsonl",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+
     gui = subparsers.add_parser(
         "gui",
         help="launch the Tkinter interface",
@@ -167,9 +175,31 @@ def _print_error(
             }
         ),
         file=sys.stderr,
+        flush=True,
     )
 
     return 2
+
+
+def _print_progress(
+    stage: str,
+    status: str,
+    message: str,
+) -> None:
+    """Write one flushed JSONL stage event to stdout."""
+
+    print(
+        json.dumps(
+            {
+                "type": "progress",
+                "stage": stage,
+                "status": status,
+                "message": message,
+            },
+            sort_keys=True,
+        ),
+        flush=True,
+    )
 
 
 def _run_gui(
@@ -254,10 +284,17 @@ def main(
         limits=limits,
     )
 
+    progress_callback = (
+        _print_progress
+        if args.progress_jsonl
+        else None
+    )
+
     try:
         result = run_inventory_scan(
             args.staging_subdirectory,
             config,
+            on_progress=progress_callback,
         )
 
     except (
@@ -281,7 +318,8 @@ def main(
                 ),
             },
             sort_keys=True,
-        )
+        ),
+        flush=True,
     )
 
     return 0

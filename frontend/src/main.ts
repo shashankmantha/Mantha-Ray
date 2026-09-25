@@ -3,6 +3,22 @@ import "./styles.css";
 
 
 type JsonObject = Record<string, unknown>;
+type StageName =
+  | "inventory"
+  | "clamav"
+  | "capa"
+  | "floss"
+  | "report";
+
+
+type StageStatus =
+  | "waiting"
+  | "running"
+  | "completed"
+  | "incomplete"
+  | "unavailable"
+  | "error"
+  | "cancelled";
 
 
 interface ApiErrorBody {
@@ -14,7 +30,58 @@ interface ScanEvent {
   time: string;
   message: string;
 }
+type ArtifactRisk =
+  | "high"
+  | "medium"
+  | "low"
+  | "clean";
 
+
+type CoverageStatus =
+  | "completed"
+  | "finding"
+  | "incomplete"
+  | "unavailable"
+  | "not-applicable"
+  | "error";
+
+
+type AnalyzerName =
+  | "clamav"
+  | "capa"
+  | "floss";
+
+
+interface ArtifactRecord {
+  relative_path: string;
+  kind: string;
+  detected_type: string | null;
+  routing_class: string | null;
+  state: string | null;
+  mode: string | null;
+  size_bytes: number | null;
+  sha256: string | null;
+  review_flags: number;
+  error: string | null;
+}
+
+
+interface ArtifactDisplay {
+  artifact: ArtifactRecord;
+  risk: ArtifactRisk;
+  coverage: Record<AnalyzerName, CoverageStatus>;
+}
+
+
+interface ArtifactTreeNode {
+  name: string;
+  path: string;
+  directory: boolean;
+  children: Map<string, ArtifactTreeNode>;
+  artifact: ArtifactDisplay | null;
+  fileCount: number;
+  risk: ArtifactRisk;
+}
 
 interface ScanResult {
   case_id: string;
@@ -23,6 +90,7 @@ interface ScanResult {
   report_path: string;
   report: JsonObject;
   report_markdown: string;
+  artifacts?: ArtifactRecord[];
 }
 
 
@@ -31,8 +99,24 @@ interface ScanState {
   state: string;
   message: string;
   events: ScanEvent[];
+  stages?: Partial<Record<StageName, StageStatus>>;
   result: ScanResult | null;
   error: string | null;
+}
+
+
+interface CaseHistoryEntry {
+  case_id: string;
+  status: string;
+  created_at: string;
+  source_directory: string | null;
+  label: string;
+}
+
+
+interface CaseHistoryResponse {
+  cases: CaseHistoryEntry[];
+  truncated: boolean;
 }
 
 
@@ -42,6 +126,11 @@ interface ScanSession {
   sourcePath: string;
   startedAt: Date;
   state: ScanState;
+  historical: boolean;
+  loaded: boolean;
+  caseId: string | null;
+  resultsDirectory: string;
+  persistedStatus: string | null;
 }
 
 
@@ -50,6 +139,22 @@ const terminalStates = new Set([
   "failed",
   "cancelled",
 ]);
+
+const stageOrder: readonly StageName[] = [
+  "inventory",
+  "clamav",
+  "capa",
+  "floss",
+  "report",
+];
+
+const stageLabels: Record<StageName, string> = {
+  inventory: "Inventory",
+  clamav: "ClamAV",
+  capa: "capa",
+  floss: "FLOSS",
+  report: "Report",
+};
 
 const sessions = new Map<string, ScanSession>();
 const sessionOrder: string[] = [];
@@ -226,6 +331,10 @@ async function selectDirectory(
 
   if (response.path) {
     input.value = response.path;
+
+    if (purpose === "results") {
+      await loadHistory();
+    }
   }
 }
 
@@ -238,10 +347,21 @@ function pathLabel(path: string): string {
 
 
 function statusText(session: ScanSession): string {
+  if (
+    session.state.state === "loading"
+    || session.state.state === "failed"
+  ) {
+    return session.state.state;
+  }
+
   const resultStatus = session.state.result?.status;
 
   if (resultStatus) {
     return resultStatus.replaceAll("_", " ");
+  }
+
+  if (session.persistedStatus) {
+    return session.persistedStatus.replaceAll("_", " ");
   }
 
   return session.state.state.replaceAll("_", " ");
@@ -249,7 +369,16 @@ function statusText(session: ScanSession): string {
 
 
 function statusKind(session: ScanSession): string {
+  if (session.state.state === "loading") {
+    return "running";
+  }
+
+  if (session.state.state === "failed") {
+    return "danger";
+  }
+
   const value = session.state.result?.status
+    ?? session.persistedStatus
     ?? session.state.state;
 
   if (
@@ -272,6 +401,10 @@ function statusKind(session: ScanSession): string {
     return "muted";
   }
 
+  if (value === "unknown") {
+    return "muted";
+  }
+
   if (value === "needs_review") {
     return "warning";
   }
@@ -281,6 +414,19 @@ function statusKind(session: ScanSession): string {
 
 
 function formatSessionTime(date: Date): string {
+  const now = new Date();
+
+  if (
+    date.getFullYear() !== now.getFullYear()
+    || date.getMonth() !== now.getMonth()
+    || date.getDate() !== now.getDate()
+  ) {
+    return date.toLocaleDateString([], {
+      month: "short",
+      day: "numeric",
+    });
+  }
+
   return date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
@@ -328,9 +474,90 @@ function renderSessionList(): void {
 
     copy.append(title, meta);
     button.append(dot, copy);
-    button.addEventListener("click", () => selectSession(id));
+    button.addEventListener("click", () => {
+      void selectSession(id);
+    });
     scanList.append(button);
   }
+}
+
+
+async function loadHistory(): Promise<void> {
+  const resultsDirectory = resultsInput.value;
+
+  for (const [id, session] of sessions) {
+    if (session.historical) {
+      sessions.delete(id);
+      const index = sessionOrder.indexOf(id);
+
+      if (index >= 0) {
+        sessionOrder.splice(index, 1);
+      }
+    }
+  }
+
+  if (!resultsDirectory) {
+    renderSessionList();
+    return;
+  }
+
+  const history = await api<CaseHistoryResponse>(
+    "/api/cases",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        results_directory: resultsDirectory,
+      }),
+    },
+  );
+
+  const knownCaseIds = new Set(
+    Array.from(sessions.values())
+      .map((session) =>
+        session.state.result?.case_id
+        ?? session.caseId,
+      )
+      .filter((value): value is string =>
+        typeof value === "string",
+      ),
+  );
+
+  for (const entry of history.cases) {
+    if (knownCaseIds.has(entry.case_id)) {
+      continue;
+    }
+
+    const id = `case:${entry.case_id}`;
+    const startedAt = new Date(entry.created_at);
+    const validStartedAt = Number.isNaN(
+      startedAt.getTime(),
+    )
+      ? new Date()
+      : startedAt;
+
+    sessions.set(id, {
+      id,
+      label: entry.label,
+      sourcePath: entry.source_directory ?? "",
+      startedAt: validStartedAt,
+      state: {
+        scan_id: entry.case_id,
+        state: "completed",
+        message: "Saved scan results are available.",
+        events: [],
+        result: null,
+        error: null,
+      },
+      historical: true,
+      loaded: false,
+      caseId: entry.case_id,
+      resultsDirectory,
+      persistedStatus: entry.status,
+    });
+    sessionOrder.push(id);
+  }
+
+  renderSessionList();
 }
 
 
@@ -358,7 +585,7 @@ function showSetup(resetSource = false): void {
 }
 
 
-function selectSession(id: string): void {
+async function selectSession(id: string): Promise<void> {
   if (!sessions.has(id)) {
     return;
   }
@@ -368,6 +595,47 @@ function selectSession(id: string): void {
   setupView.classList.add("d-none");
   scanView.classList.remove("d-none");
   renderSessionList();
+
+  const session = sessions.get(id);
+
+  if (
+    session?.historical
+    && !session.loaded
+    && session.caseId
+  ) {
+    session.state.state = "loading";
+    session.state.message = "Loading saved report...";
+    renderSessionList();
+    renderSelectedSession();
+
+    try {
+      session.state = await api<ScanState>(
+        `/api/cases/${session.caseId}`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            results_directory:
+              session.resultsDirectory,
+          }),
+        },
+      );
+      session.loaded = true;
+      session.persistedStatus =
+        session.state.result?.status
+        ?? session.persistedStatus;
+    } catch (error) {
+      const message = error instanceof Error
+        ? error.message
+        : String(error);
+
+      session.state.state = "failed";
+      session.state.error = message;
+      session.state.message = message;
+    }
+
+    renderSessionList();
+  }
+
   renderSelectedSession();
 }
 
@@ -445,6 +713,11 @@ async function startScan(): Promise<void> {
       sourcePath,
       startedAt: new Date(),
       state,
+      historical: false,
+      loaded: true,
+      caseId: null,
+      resultsDirectory: resultsInput.value,
+      persistedStatus: null,
     };
 
     sessions.set(session.id, session);
@@ -452,7 +725,7 @@ async function startScan(): Promise<void> {
     activeScanId = session.id;
     selectedScanId = session.id;
     updateControlState();
-    selectSession(session.id);
+    void selectSession(session.id);
     schedulePoll(100);
   } catch (error) {
     showError(
@@ -543,10 +816,60 @@ function updateSession(state: ScanState): void {
   }
 }
 
+function stageStatusText(status: StageStatus): string {
+  switch (status) {
+    case "waiting":
+      return "Waiting";
+
+    case "running":
+      return "Running";
+
+    case "completed":
+      return "Completed";
+
+    case "incomplete":
+      return "Incomplete";
+
+    case "unavailable":
+      return "Unavailable";
+
+    case "error":
+      return "Error";
+
+    case "cancelled":
+      return "Cancelled";
+  }
+}
+
+
+function renderStageTracker(state: ScanState): void {
+  for (const stage of stageOrder) {
+    const status = state.stages?.[stage] ?? "waiting";
+    const row = element<HTMLElement>(
+      `stage-${stage}`,
+    );
+    const statusElement = element<HTMLElement>(
+      `stage-${stage}-status`,
+    );
+
+    row.className =
+      `stage-step stage-state-${status}`;
+
+    row.setAttribute(
+      "aria-label",
+      `${stageLabels[stage]}: ${stageStatusText(status)}`,
+    );
+
+    statusElement.textContent =
+      stageStatusText(status);
+  }
+}
 
 function renderProgress(state: ScanState): void {
+  renderStageTracker(state);
   progressMessage.textContent = state.message;
-  progressState.textContent = state.state.toUpperCase();
+  progressState.textContent =
+    state.state.toUpperCase();
 }
 
 
@@ -651,12 +974,25 @@ function analyzerDescription(
       : `${findings.toLocaleString()} signature match${findings === 1 ? "" : "es"}`;
   }
 
-  if (name === "capa") {
+   if (name === "capa") {
     const count = data.capability_count
       ?? data.total_capabilities;
-    return typeof count === "number"
-      ? `${count.toLocaleString()} capability match${count === 1 ? "" : "es"}`
-      : "See full report";
+    const risk = objectValue(data.risk);
+    const score = risk?.score;
+    const level = typeof risk?.level === "string"
+      ? risk.level.replaceAll("_", " ")
+      : null;
+
+    if (typeof count !== "number") {
+      return "See full report";
+    }
+
+    const matchSummary =
+      `${count.toLocaleString()} capability match${count === 1 ? "" : "es"}`;
+
+    return typeof score === "number" && level
+      ? `${matchSummary} · risk ${score.toLocaleString()} (${level})`
+      : matchSummary;
   }
 
   const strings = data.extracted_string_count
@@ -681,6 +1017,665 @@ function setStage(
     analyzerDescription(data, name);
 }
 
+function analyzerResultMap(
+  data: JsonObject | null,
+): Map<string, JsonObject> {
+  const results = data?.results;
+  const mapped = new Map<string, JsonObject>();
+
+  if (!Array.isArray(results)) {
+    return mapped;
+  }
+
+  for (const value of results) {
+    const result = objectValue(value);
+
+    if (
+      result
+      && typeof result.relative_path === "string"
+    ) {
+      mapped.set(
+        result.relative_path,
+        result,
+      );
+    }
+  }
+
+  return mapped;
+}
+
+
+function pathMatches(
+  candidate: string,
+  relativePath: string,
+): boolean {
+  const normalized = candidate.replaceAll("\\", "/");
+
+  return (
+    normalized === relativePath
+    || normalized.endsWith(`/${relativePath}`)
+    || normalized.startsWith(`${relativePath}:`)
+    || normalized.includes(`/${relativePath}:`)
+  );
+}
+
+
+function clamavHasFinding(
+  data: JsonObject | null,
+  relativePath: string,
+): boolean {
+  const findings = data?.findings;
+
+  if (!Array.isArray(findings)) {
+    return false;
+  }
+
+  for (const finding of findings) {
+    if (
+      typeof finding === "string"
+      && pathMatches(finding, relativePath)
+    ) {
+      return true;
+    }
+
+    const object = objectValue(finding);
+
+    if (!object) {
+      continue;
+    }
+
+    for (const key of [
+      "relative_path",
+      "path",
+      "file",
+      "filename",
+    ]) {
+      const candidate = object[key];
+
+      if (
+        typeof candidate === "string"
+        && pathMatches(candidate, relativePath)
+      ) {
+        return true;
+      }
+    }
+  }
+
+  return false;
+}
+
+
+function analyzerCoverage(
+  analyzerData: JsonObject | null,
+  fileResult: JsonObject | null,
+  eligible: boolean,
+): CoverageStatus {
+  if (!eligible) {
+    return "not-applicable";
+  }
+
+  if (!analyzerData) {
+    return "unavailable";
+  }
+
+  if (analyzerData.status === "not_run") {
+    return "unavailable";
+  }
+
+  if (analyzerData.status === "error") {
+    return "error";
+  }
+
+  if (fileResult) {
+    if (fileResult.status === "error") {
+      return "error";
+    }
+
+    return fileResult.complete === true
+      ? "completed"
+      : "incomplete";
+  }
+
+  return analyzerData.complete === true
+    ? "incomplete"
+    : "incomplete";
+}
+
+
+function artifactRisk(
+  artifact: ArtifactRecord,
+  clamavFinding: boolean,
+  capaResult: JsonObject | null,
+): ArtifactRisk {
+  if (clamavFinding) {
+    return "high";
+  }
+
+  if (
+    artifact.error
+    || artifact.review_flags > 0
+  ) {
+    return "medium";
+  }
+
+  const risk = objectValue(capaResult?.risk);
+
+  if (risk) {
+    const level = typeof risk.level === "string"
+      ? risk.level.toLowerCase()
+      : "";
+
+    if (
+      risk.high_concern === true
+      || level.includes("high")
+    ) {
+      return "high";
+    }
+
+    if (
+      risk.review_required === true
+      || level === "medium"
+      || level === "review"
+    ) {
+      return "medium";
+    }
+
+    if (
+      typeof risk.score === "number"
+      && risk.score > 0
+    ) {
+      return "low";
+    }
+  }
+
+  if (
+    typeof capaResult?.capability_count === "number"
+    && capaResult.capability_count > 0
+  ) {
+    return "low";
+  }
+
+  return "clean";
+}
+
+
+function artifactDisplayRecords(
+  result: ScanResult,
+): ArtifactDisplay[] {
+  const artifacts = result.artifacts ?? [];
+  const report = result.report;
+  const clamav = analyzer(report, "clamav");
+  const capa = analyzer(report, "capa");
+  const floss = analyzer(report, "floss");
+  const capaResults = analyzerResultMap(capa);
+  const flossResults = analyzerResultMap(floss);
+
+  return artifacts.map((artifact) => {
+    const relativePath = artifact.relative_path;
+    const capaResult =
+      capaResults.get(relativePath) ?? null;
+    const flossResult =
+      flossResults.get(relativePath) ?? null;
+    const hasClamavFinding = clamavHasFinding(
+      clamav,
+      relativePath,
+    );
+    const routingClass =
+      artifact.routing_class?.toLowerCase() ?? "";
+    const regularFile =
+      artifact.kind === "regular_file";
+    const capaEligible = (
+      capaResult !== null
+      || ["pe", "elf", "dotnet"].includes(
+        routingClass,
+      )
+    );
+    const flossEligible = (
+      flossResult !== null
+      || ["pe", "dotnet"].includes(
+        routingClass,
+      )
+    );
+
+    let clamavCoverage: CoverageStatus;
+
+    if (!regularFile) {
+      clamavCoverage = "not-applicable";
+    } else if (hasClamavFinding) {
+      clamavCoverage = "finding";
+    } else if (!clamav) {
+      clamavCoverage = "unavailable";
+    } else if (clamav.status === "error") {
+      clamavCoverage = "error";
+    } else if (clamav.complete === true) {
+      clamavCoverage = "completed";
+    } else {
+      clamavCoverage = "incomplete";
+    }
+
+    return {
+      artifact,
+      risk: artifactRisk(
+        artifact,
+        hasClamavFinding,
+        capaResult,
+      ),
+      coverage: {
+        clamav: clamavCoverage,
+        capa: analyzerCoverage(
+          capa,
+          capaResult,
+          regularFile && capaEligible,
+        ),
+        floss: analyzerCoverage(
+          floss,
+          flossResult,
+          regularFile && flossEligible,
+        ),
+      },
+    };
+  });
+}
+
+
+function makeTreeNode(
+  name: string,
+  path: string,
+  directory: boolean,
+): ArtifactTreeNode {
+  return {
+    name,
+    path,
+    directory,
+    children: new Map(),
+    artifact: null,
+    fileCount: 0,
+    risk: "clean",
+  };
+}
+
+
+function buildArtifactTree(
+  artifacts: ArtifactDisplay[],
+): ArtifactTreeNode {
+  const root = makeTreeNode(
+    "",
+    "",
+    true,
+  );
+
+  for (const display of artifacts) {
+    const pieces = display.artifact.relative_path
+      .split("/")
+      .filter(Boolean);
+
+    let current = root;
+    let currentPath = "";
+
+    pieces.forEach((piece, index) => {
+      currentPath = currentPath
+        ? `${currentPath}/${piece}`
+        : piece;
+
+      const finalPiece =
+        index === pieces.length - 1;
+      let child = current.children.get(piece);
+
+      if (!child) {
+        child = makeTreeNode(
+          piece,
+          currentPath,
+          !finalPiece,
+        );
+        current.children.set(piece, child);
+      }
+
+      if (finalPiece) {
+        child.directory = false;
+        child.artifact = display;
+      }
+
+      current = child;
+    });
+  }
+
+  summarizeTree(root);
+  return root;
+}
+
+
+const riskRanks: Record<ArtifactRisk, number> = {
+  clean: 0,
+  low: 1,
+  medium: 2,
+  high: 3,
+};
+
+
+function highestRisk(
+  first: ArtifactRisk,
+  second: ArtifactRisk,
+): ArtifactRisk {
+  return riskRanks[second] > riskRanks[first]
+    ? second
+    : first;
+}
+
+
+function summarizeTree(
+  node: ArtifactTreeNode,
+): void {
+  if (!node.directory) {
+    node.fileCount = 1;
+    node.risk = node.artifact?.risk ?? "clean";
+    return;
+  }
+
+  node.fileCount = 0;
+  node.risk = "clean";
+
+  for (const child of node.children.values()) {
+    summarizeTree(child);
+    node.fileCount += child.fileCount;
+    node.risk = highestRisk(
+      node.risk,
+      child.risk,
+    );
+  }
+}
+
+
+function formatBytes(
+  bytes: number | null,
+): string {
+  if (bytes === null) {
+    return "Unknown size";
+  }
+
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+
+  if (bytes < 1024 ** 2) {
+    return `${(bytes / 1024).toFixed(1)} KB`;
+  }
+
+  if (bytes < 1024 ** 3) {
+    return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
+  }
+
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
+
+function coverageLabel(
+  status: CoverageStatus,
+): string {
+  switch (status) {
+    case "completed":
+      return "Completed";
+
+    case "finding":
+      return "Finding";
+
+    case "incomplete":
+      return "Incomplete";
+
+    case "unavailable":
+      return "Unavailable";
+
+    case "not-applicable":
+      return "Not applicable";
+
+    case "error":
+      return "Error";
+  }
+}
+
+
+function createRiskBadge(
+  risk: ArtifactRisk,
+): HTMLSpanElement {
+  const badge = document.createElement("span");
+  badge.className = `artifact-risk artifact-risk-${risk}`;
+  badge.textContent = risk;
+  return badge;
+}
+
+
+function createCoverageBadge(
+  name: AnalyzerName,
+  status: CoverageStatus,
+): HTMLSpanElement {
+  const badge = document.createElement("span");
+  badge.className =
+    `tool-badge tool-state-${status}`;
+  badge.textContent = name === "clamav"
+    ? "ClamAV"
+    : name === "floss"
+      ? "FLOSS"
+      : "capa";
+  badge.title =
+    `${badge.textContent}: ${coverageLabel(status)}`;
+  badge.setAttribute(
+    "aria-label",
+    badge.title,
+  );
+  return badge;
+}
+
+
+function sortedTreeChildren(
+  node: ArtifactTreeNode,
+): ArtifactTreeNode[] {
+  return Array.from(node.children.values()).sort(
+    (first, second) => {
+      if (first.directory !== second.directory) {
+        return first.directory ? -1 : 1;
+      }
+
+      return first.name.localeCompare(
+        second.name,
+        undefined,
+        {
+          numeric: true,
+          sensitivity: "base",
+        },
+      );
+    },
+  );
+}
+
+
+function renderArtifactNode(
+  node: ArtifactTreeNode,
+  depth: number,
+): HTMLDivElement {
+  const wrapper = document.createElement("div");
+  wrapper.className = "artifact-node";
+
+  const row = document.createElement("div");
+  row.className = node.directory
+    ? "artifact-row artifact-directory-row"
+    : "artifact-row artifact-file-row";
+  row.style.setProperty(
+    "--artifact-depth",
+    String(depth),
+  );
+
+  const pathCell = document.createElement("div");
+  pathCell.className = "artifact-path-cell";
+
+  const icon = document.createElement("span");
+  icon.className = node.directory
+    ? "artifact-icon artifact-icon-directory"
+    : "artifact-icon artifact-icon-file";
+  icon.textContent = node.directory ? "D" : "F";
+  icon.setAttribute("aria-hidden", "true");
+
+  const nameCopy = document.createElement("span");
+  nameCopy.className = "artifact-name-copy";
+
+  const name = document.createElement("strong");
+  name.textContent = node.name;
+  name.title = node.path;
+
+  const metadata = document.createElement("small");
+
+  if (node.directory) {
+    metadata.textContent =
+      `${node.fileCount.toLocaleString()} `
+      + `file${node.fileCount === 1 ? "" : "s"}`;
+  } else {
+    const artifact = node.artifact?.artifact;
+    const details = [
+      formatBytes(artifact?.size_bytes ?? null),
+      artifact?.detected_type ?? null,
+    ].filter(
+      (value): value is string =>
+        typeof value === "string" && value.length > 0,
+    );
+
+    metadata.textContent = details.join(" · ");
+  }
+
+  nameCopy.append(name, metadata);
+
+  let children: HTMLDivElement | null = null;
+
+  if (node.directory) {
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "artifact-toggle";
+    toggle.textContent = "▾";
+    toggle.setAttribute("aria-expanded", "true");
+    toggle.setAttribute(
+      "aria-label",
+      `Collapse ${node.path}`,
+    );
+
+    pathCell.append(toggle, icon, nameCopy);
+
+    children = document.createElement("div");
+    children.className = "artifact-children";
+
+    toggle.addEventListener("click", () => {
+      if (!children) {
+        return;
+      }
+
+      const collapsed = !children.hidden;
+      children.hidden = collapsed;
+      toggle.textContent = collapsed ? "▸" : "▾";
+      toggle.setAttribute(
+        "aria-expanded",
+        String(!collapsed),
+      );
+      toggle.setAttribute(
+        "aria-label",
+        `${collapsed ? "Expand" : "Collapse"} ${node.path}`,
+      );
+    });
+  } else {
+    const spacer = document.createElement("span");
+    spacer.className = "artifact-toggle-spacer";
+    pathCell.append(spacer, icon, nameCopy);
+  }
+
+  const coverageCell = document.createElement("div");
+  coverageCell.className = "artifact-coverage-cell";
+
+  if (node.artifact) {
+    for (const analyzerName of [
+      "clamav",
+      "capa",
+      "floss",
+    ] as const) {
+      const status =
+        node.artifact.coverage[analyzerName];
+
+      if (status !== "not-applicable") {
+        coverageCell.append(
+          createCoverageBadge(
+            analyzerName,
+            status,
+          ),
+        );
+      }
+    }
+  } else {
+    const summary = document.createElement("span");
+    summary.className = "directory-coverage";
+    summary.textContent =
+      `${node.fileCount.toLocaleString()} inventoried`;
+    coverageCell.append(summary);
+  }
+
+  const riskCell = document.createElement("div");
+  riskCell.className = "artifact-risk-cell";
+  riskCell.append(createRiskBadge(node.risk));
+
+  row.append(
+    pathCell,
+    coverageCell,
+    riskCell,
+  );
+  wrapper.append(row);
+
+  if (children) {
+    for (const child of sortedTreeChildren(node)) {
+      children.append(
+        renderArtifactNode(
+          child,
+          depth + 1,
+        ),
+      );
+    }
+
+    wrapper.append(children);
+  }
+
+  return wrapper;
+}
+
+
+function renderArtifactTree(
+  result: ScanResult,
+): void {
+  const tree = element<HTMLDivElement>(
+    "artifact-tree",
+  );
+  const empty = element<HTMLParagraphElement>(
+    "artifact-tree-empty",
+  );
+  const records = artifactDisplayRecords(result);
+
+  element("artifact-count").textContent =
+    `${records.length.toLocaleString()} `
+    + `file${records.length === 1 ? "" : "s"}`;
+
+  tree.replaceChildren();
+
+  if (records.length === 0) {
+    tree.classList.add("d-none");
+    empty.classList.remove("d-none");
+    return;
+  }
+
+  tree.classList.remove("d-none");
+  empty.classList.add("d-none");
+
+  const root = buildArtifactTree(records);
+
+  for (const child of sortedTreeChildren(root)) {
+    tree.append(
+      renderArtifactNode(
+        child,
+        0,
+      ),
+    );
+  }
+}
 
 function renderResult(state: ScanState): void {
   const result = state.result;
@@ -705,6 +1700,8 @@ function renderResult(state: ScanState): void {
   element("metric-floss").textContent = numberValue(
     floss?.extracted_string_count ?? floss?.total_string_count,
   );
+
+  renderArtifactTree(result);
 
   element("inventory-summary").textContent =
     `${numberValue(summary.hashed_files)} files hashed`;
@@ -740,7 +1737,27 @@ async function openCase(): Promise<void> {
     return;
   }
 
+  const session = sessions.get(selectedScanId);
+
+  if (!session) {
+    return;
+  }
+
   try {
+    if (session.historical && session.caseId) {
+      await api<{ ok: boolean }>(
+        `/api/cases/${session.caseId}/open-folder`,
+        {
+          method: "POST",
+          body: JSON.stringify({
+            results_directory:
+              session.resultsDirectory,
+          }),
+        },
+      );
+      return;
+    }
+
     await api<{ ok: boolean }>(
       `/api/scans/${selectedScanId}/open-folder`,
       {
@@ -811,6 +1828,20 @@ async function initialize(): Promise<void> {
   try {
     await establishSession();
     await loadConfiguration();
+
+    try {
+      await loadHistory();
+    } catch (error) {
+      showError(
+        "Saved scan history could not be loaded. "
+        + (
+          error instanceof Error
+            ? error.message
+            : String(error)
+        ),
+      );
+    }
+
     await checkHealth();
   } catch (error) {
     serviceBadge.textContent = "Session unavailable";

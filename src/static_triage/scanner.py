@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Callable, Literal
 from uuid import uuid4
 
 from .boundary import (
@@ -21,6 +22,29 @@ from .preflight import inspect_tools
 from .reporting import write_case_artifacts
 
 
+ScanStage = Literal[
+    "inventory",
+    "clamav",
+    "capa",
+    "floss",
+    "report",
+]
+
+ScanStageStatus = Literal[
+    "waiting",
+    "running",
+    "completed",
+    "incomplete",
+    "unavailable",
+    "error",
+]
+
+ProgressCallback = Callable[
+    [ScanStage, ScanStageStatus, str],
+    None,
+]
+
+
 @dataclass(frozen=True, slots=True)
 class ScanResult:
     """Small result returned to the CLI or OpenClaw."""
@@ -35,6 +59,22 @@ def _utc_now() -> datetime:
     """Return a timezone-aware UTC timestamp."""
 
     return datetime.now(UTC)
+
+
+def _emit_progress(
+    callback: ProgressCallback | None,
+    stage: ScanStage,
+    status: ScanStageStatus,
+    message: str,
+) -> None:
+    """Publish one optional stage transition."""
+
+    if callback is not None:
+        callback(
+            stage,
+            status,
+            message,
+        )
 
 
 def _available_tool(
@@ -57,6 +97,8 @@ def _available_tool(
 def run_inventory_scan(
     staging_subdirectory: str,
     config: ScanConfig,
+    *,
+    on_progress: ProgressCallback | None = None,
 ) -> ScanResult:
     """Run inventory, ClamAV, capa, and FLOSS analysis."""
 
@@ -84,9 +126,26 @@ def run_inventory_scan(
 
     case_directory = results_root / case_id
 
+    _emit_progress(
+        on_progress,
+        "inventory",
+        "running",
+        "Inventorying and hashing files...",
+    )
+
     entries, summary = inventory_tree(
         target,
         config.limits,
+    )
+
+    _emit_progress(
+        on_progress,
+        "inventory",
+        "completed",
+        (
+            "Inventory completed: "
+            f"{summary.hashed_files} files hashed."
+        ),
     )
 
     tools = inspect_tools()
@@ -99,12 +158,28 @@ def run_inventory_scan(
     ]
 
     clamav_result: ClamAVResult | None = None
+
     clamav_tool = _available_tool(
         tools,
         "clamscan",
     )
 
-    if clamav_tool is not None:
+    if clamav_tool is None:
+        _emit_progress(
+            on_progress,
+            "clamav",
+            "unavailable",
+            "ClamAV is unavailable.",
+        )
+
+    else:
+        _emit_progress(
+            on_progress,
+            "clamav",
+            "running",
+            "ClamAV is scanning for signature matches...",
+        )
+
         try:
             clamav_result = run_clamav(
                 target,
@@ -116,13 +191,52 @@ def run_inventory_scan(
                 f"{type(exc).__name__}: {exc}"
             )
 
+            _emit_progress(
+                on_progress,
+                "clamav",
+                "incomplete",
+                "ClamAV could not complete its analysis.",
+            )
+
+        else:
+            if clamav_result.complete:
+                _emit_progress(
+                    on_progress,
+                    "clamav",
+                    "completed",
+                    "ClamAV analysis completed.",
+                )
+            else:
+                _emit_progress(
+                    on_progress,
+                    "clamav",
+                    "incomplete",
+                    "ClamAV analysis was incomplete.",
+                )
+
     capa_result: CapaBatchResult | None = None
+
     capa_tool = _available_tool(
         tools,
         "capa",
     )
 
-    if capa_tool is not None:
+    if capa_tool is None:
+        _emit_progress(
+            on_progress,
+            "capa",
+            "unavailable",
+            "capa is unavailable.",
+        )
+
+    else:
+        _emit_progress(
+            on_progress,
+            "capa",
+            "running",
+            "capa is analyzing eligible binaries...",
+        )
+
         try:
             capa_result = run_capa_batch(
                 entries,
@@ -150,13 +264,52 @@ def run_inventory_scan(
                 f"{type(exc).__name__}: {exc}"
             )
 
+            _emit_progress(
+                on_progress,
+                "capa",
+                "incomplete",
+                "capa could not complete its analysis.",
+            )
+
+        else:
+            if capa_result.complete:
+                _emit_progress(
+                    on_progress,
+                    "capa",
+                    "completed",
+                    "capa analysis completed.",
+                )
+            else:
+                _emit_progress(
+                    on_progress,
+                    "capa",
+                    "incomplete",
+                    "capa analysis was incomplete.",
+                )
+
     floss_result: FlossBatchResult | None = None
+
     floss_tool = _available_tool(
         tools,
         "floss",
     )
 
-    if floss_tool is not None:
+    if floss_tool is None:
+        _emit_progress(
+            on_progress,
+            "floss",
+            "unavailable",
+            "FLOSS is unavailable.",
+        )
+
+    else:
+        _emit_progress(
+            on_progress,
+            "floss",
+            "running",
+            "FLOSS is extracting eligible strings...",
+        )
+
         try:
             floss_result = run_floss_batch(
                 entries,
@@ -177,7 +330,7 @@ def run_inventory_scan(
                     config.limits
                     .floss_max_output_bytes
                 ),
-                                max_strings=(
+                max_strings=(
                     config.limits.floss_max_strings
                 ),
                 max_string_chars=(
@@ -191,10 +344,40 @@ def run_inventory_scan(
                 f"{type(exc).__name__}: {exc}"
             )
 
+            _emit_progress(
+                on_progress,
+                "floss",
+                "incomplete",
+                "FLOSS could not complete its analysis.",
+            )
+
+        else:
+            if floss_result.complete:
+                _emit_progress(
+                    on_progress,
+                    "floss",
+                    "completed",
+                    "FLOSS analysis completed.",
+                )
+            else:
+                _emit_progress(
+                    on_progress,
+                    "floss",
+                    "incomplete",
+                    "FLOSS analysis was incomplete.",
+                )
+
     completed = _utc_now()
 
     target_relative = (
         target.relative_to(staging_root).as_posix()
+    )
+
+    _emit_progress(
+        on_progress,
+        "report",
+        "running",
+        "Generating case artifacts and reports...",
     )
 
     report = write_case_artifacts(
@@ -211,6 +394,13 @@ def run_inventory_scan(
         warnings=warnings,
         capa_result=capa_result,
         floss_result=floss_result,
+    )
+
+    _emit_progress(
+        on_progress,
+        "report",
+        "completed",
+        "Case artifacts and reports are ready.",
     )
 
     return ScanResult(

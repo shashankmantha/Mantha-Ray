@@ -55,6 +55,13 @@ class ScanStartRequest(BaseModel):
     )
 
 
+class CaseHistoryRequest(BaseModel):
+    results_directory: str = Field(
+        min_length=1,
+        max_length=4096,
+    )
+
+
 def create_app(
     service: ScanService,
     session_token: str,
@@ -348,6 +355,72 @@ def create_app(
         try:
             case_directory = (
                 service.case_directory(scan_id)
+            )
+
+            await asyncio.to_thread(
+                open_directory,
+                case_directory,
+            )
+
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
+        return {
+            "ok": True,
+        }
+
+    @app.post("/api/cases")
+    async def list_saved_cases(
+        payload: CaseHistoryRequest,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(
+                service.list_cases,
+                payload.results_directory,
+            )
+
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
+    @app.post("/api/cases/{case_id}")
+    async def load_saved_case(
+        case_id: str,
+        payload: CaseHistoryRequest,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(
+                service.load_case,
+                payload.results_directory,
+                case_id,
+            )
+
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
+    @app.post(
+        "/api/cases/{case_id}/open-folder"
+    )
+    async def open_saved_case_folder(
+        case_id: str,
+        payload: CaseHistoryRequest,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, bool]:
+        try:
+            case_directory = await asyncio.to_thread(
+                service.saved_case_directory,
+                payload.results_directory,
+                case_id,
             )
 
             await asyncio.to_thread(

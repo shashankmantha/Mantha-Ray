@@ -25,6 +25,12 @@ from .models import (
     ToolInfo,
 )
 
+from .capa_risk import (
+    HIGH_CONCERN_SCORE,
+    REVIEW_SCORE,
+    RISK_POLICY_VERSION,
+)
+
 
 def _write_json(path: Path, payload: Any) -> None:
     """Write stable, human-readable JSON."""
@@ -115,19 +121,19 @@ def _determine_status(
     if not analyzers_complete or not inventory_complete:
         return OverallStatus.INCOMPLETE
 
-    capa_evidence = any(
-        result.capabilities
-        for result in capa_result.results
-    )
+    capa_risk = capa_result.risk
 
     floss_evidence = any(
         result.strings
         for result in floss_result.results
     )
 
+    if capa_risk.high_concern:
+        return OverallStatus.HIGH_CONCERN
+
     if (
         summary.review_flags
-        or capa_evidence
+        or capa_risk.review_required
         or floss_evidence
     ):
         return OverallStatus.NEEDS_REVIEW
@@ -245,6 +251,18 @@ def write_case_artifacts(
             "skipped_due_to_limit": 0,
             "skipped_due_to_timeout": 0,
             "capability_count": 0,
+            "risk": {
+                "score": 0,
+                "level": "informational",
+                "review_required": False,
+                "high_concern": False,
+                "unique_capabilities": 0,
+                "policy_version": RISK_POLICY_VERSION,
+                "thresholds": {
+                    "review": REVIEW_SCORE,
+                    "high_concern": HIGH_CONCERN_SCORE,
+                },
+            },
             "results": [],
             "duration_seconds": None,
             "error": "capa was unavailable",
@@ -652,6 +670,43 @@ def _render_markdown(
         )
 
     capa = report["analyzers"]["capa"]
+    capa_risk = capa.get("risk") or {}
+
+    risk_score = capa_risk.get("score", 0)
+
+    risk_level = str(
+        capa_risk.get(
+            "level",
+            "informational",
+        )
+    ).replace("_", " ").title()
+
+    review_required = bool(
+        capa_risk.get(
+            "review_required",
+            False,
+        )
+    )
+
+    high_concern = bool(
+        capa_risk.get(
+            "high_concern",
+            False,
+        )
+    )
+
+    if high_concern:
+        verdict_impact = (
+            "Raises the completed case to High Concern."
+        )
+    elif review_required:
+        verdict_impact = (
+            "Raises the completed case to Needs Review."
+        )
+    else:
+        verdict_impact = (
+            "Does not independently require review."
+        )
 
     lines.extend(
         [
@@ -686,6 +741,12 @@ def _render_markdown(
                 "- Capability matches: "
                 f"`{capa['capability_count']}`"
             ),
+            (
+                "- Weighted risk score: "
+                f"`{risk_score}`"
+            ),
+            f"- Risk level: **{risk_level}**",
+            f"- Verdict impact: {verdict_impact}",
         ]
     )
 
@@ -719,10 +780,15 @@ def _render_markdown(
             if rendered_capabilities >= 100:
                 break
 
-            details = [
+            evidence = [
                 (
                     "matches="
-                    + str(capability["match_count"])
+                    + str(
+                        capability.get(
+                            "match_count",
+                            0,
+                        )
+                    )
                 )
             ]
 
@@ -731,7 +797,7 @@ def _render_markdown(
             )
 
             if namespace:
-                details.append(
+                evidence.append(
                     "namespace="
                     + _bounded_text(namespace)
                 )
@@ -742,7 +808,7 @@ def _render_markdown(
             )
 
             if attack_ids:
-                details.append(
+                evidence.append(
                     "ATT&CK="
                     + ", ".join(
                         _bounded_text(item)
@@ -756,7 +822,7 @@ def _render_markdown(
             )
 
             if mbc_ids:
-                details.append(
+                evidence.append(
                     "MBC="
                     + ", ".join(
                         _bounded_text(item)
@@ -764,19 +830,73 @@ def _render_markdown(
                     )
                 )
 
-            lines.append(
-                "- "
-                + _markdown_code(
-                    result["relative_path"]
+            capability_risk = (
+                capability.get("risk")
+                or {}
+            )
+
+            capability_score = (
+                capability_risk.get(
+                    "score",
+                    0,
                 )
-                + " — "
-                + _markdown_code(
-                    capability["name"]
+            )
+
+            capability_level = str(
+                capability_risk.get(
+                    "level",
+                    "informational",
                 )
-                + " — "
-                + _markdown_code(
-                    "; ".join(details)
+            ).replace("_", " ")
+
+            capability_reason = (
+                capability_risk.get("reason")
+                or (
+                    "No risk explanation "
+                    "was available."
                 )
+            )
+
+            repetition_bonus = (
+                capability_risk.get(
+                    "repetition_bonus",
+                    0,
+                )
+            )
+
+            if repetition_bonus:
+                evidence.append(
+                    "repetition bonus="
+                    + str(repetition_bonus)
+                )
+
+            lines.extend(
+                [
+                    (
+                        "- "
+                        + _markdown_code(
+                            result["relative_path"]
+                        )
+                        + " — "
+                        + _markdown_code(
+                            capability["name"]
+                        )
+                        + f" — risk {capability_score} "
+                        + f"({capability_level})"
+                    ),
+                    (
+                        "  - Why: "
+                        + _bounded_text(
+                            capability_reason
+                        )
+                    ),
+                    (
+                        "  - Evidence: "
+                        + _markdown_code(
+                            "; ".join(evidence)
+                        )
+                    ),
+                ]
             )
 
             rendered_capabilities += 1
@@ -784,7 +904,9 @@ def _render_markdown(
         if rendered_capabilities >= 100:
             break
 
-    total_capabilities = capa["capability_count"]
+    total_capabilities = capa[
+        "capability_count"
+    ]
 
     if total_capabilities > rendered_capabilities:
         remaining = (
@@ -817,9 +939,7 @@ def _render_markdown(
                 "analysis."
             )
 
-
     floss = report["analyzers"]["floss"]
-
 
     lines.extend(
         [
@@ -871,7 +991,10 @@ def _render_markdown(
             + _markdown_code(floss["error"])
         )
 
-    floss_results = floss.get("results") or []
+    floss_results = (
+        floss.get("results") or []
+    )
+
     rendered_strings = 0
 
     for result in floss_results:
@@ -896,8 +1019,12 @@ def _render_markdown(
                 break
 
             details = [
-                "kind="
-                + _bounded_text(item["kind"])
+                (
+                    "kind="
+                    + _bounded_text(
+                        item["kind"]
+                    )
+                )
             ]
 
             encoding = item.get("encoding")
@@ -919,7 +1046,9 @@ def _render_markdown(
                     result["relative_path"]
                 )
                 + " — "
-                + _markdown_code(item["value"])
+                + _markdown_code(
+                    item["value"]
+                )
                 + " — "
                 + _markdown_code(
                     "; ".join(details)
@@ -937,7 +1066,8 @@ def _render_markdown(
 
     if stored_strings > rendered_strings:
         remaining = (
-            stored_strings - rendered_strings
+            stored_strings
+            - rendered_strings
         )
 
         lines.append(
@@ -946,10 +1076,15 @@ def _render_markdown(
             "`report.json`."
         )
 
-    total_strings = floss["total_string_count"]
+    total_strings = floss[
+        "total_string_count"
+    ]
 
     if total_strings > stored_strings:
-        omitted = total_strings - stored_strings
+        omitted = (
+            total_strings
+            - stored_strings
+        )
 
         lines.append(
             f"- {omitted} additional strings exceeded "
@@ -976,7 +1111,6 @@ def _render_markdown(
                 "analysis."
             )
 
-            
     incomplete_reasons = report[
         "incomplete_reasons"
     ]
@@ -1009,7 +1143,6 @@ def _render_markdown(
                 ),
             ]
         )
-
 
     lines.extend(
         [
@@ -1045,7 +1178,9 @@ def _render_markdown(
         )
 
     if len(review_items) > 100:
-        remaining = len(review_items) - 100
+        remaining = (
+            len(review_items) - 100
+        )
 
         lines.append(
             f"- {remaining} additional review "
