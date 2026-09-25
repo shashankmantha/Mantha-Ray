@@ -116,8 +116,8 @@ Access to the Docker daemon is security-sensitive. Membership in the Docker grou
 Clone the repository:
 
 ```bash
-git clone <YOUR-REPOSITORY-URL> malware-scanner
-cd malware-scanner
+git clone git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
+cd Mantha-Ray
 ```
 
 Create and activate a Python virtual environment:
