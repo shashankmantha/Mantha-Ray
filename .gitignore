@@ -115,3 +115,8 @@ Desktop.ini
 .nox/
 .prof/
 *.prof
+
+
+#-----
+/files.jsonl
+/report.json

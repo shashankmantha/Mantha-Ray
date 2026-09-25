@@ -1,1 +1,0 @@
-{"detected_type": "ELF 64-bit", "error": null, "evidence": [], "kind": "regular_file", "mode": "0o755", "relative_path": "elf-test/true", "routing_class": "elf", "sha256": "7ab6c80be265496fa860ac26f3c15fb8210f7b01da72fb9452ba5c0ef8f050d7", "size_bytes": 32304, "state": "inventoried"}
