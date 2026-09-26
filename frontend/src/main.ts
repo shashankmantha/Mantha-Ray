@@ -1,15 +1,14 @@
 import "bootstrap/dist/css/bootstrap.min.css";
 import "./styles.css";
 
-
 type JsonObject = Record<string, unknown>;
+
 type StageName =
   | "inventory"
   | "clamav"
   | "capa"
   | "floss"
   | "report";
-
 
 type StageStatus =
   | "waiting"
@@ -20,22 +19,21 @@ type StageStatus =
   | "error"
   | "cancelled";
 
-
 interface ApiErrorBody {
   detail?: unknown;
 }
-
 
 interface ScanEvent {
   time: string;
   message: string;
 }
+
 type ArtifactRisk =
   | "high"
   | "medium"
   | "low"
-  | "clean";
-
+  | "clean"
+  | "unknown";
 
 type CoverageStatus =
   | "completed"
@@ -45,12 +43,18 @@ type CoverageStatus =
   | "not-applicable"
   | "error";
 
-
 type AnalyzerName =
   | "clamav"
   | "capa"
   | "floss";
 
+type ArtifactRiskSource =
+  | AnalyzerName
+  | "inventory"
+  | "coverage"
+  | "all-tools"
+  | "child"
+  | null;
 
 interface ArtifactRecord {
   relative_path: string;
@@ -65,13 +69,13 @@ interface ArtifactRecord {
   error: string | null;
 }
 
-
 interface ArtifactDisplay {
   artifact: ArtifactRecord;
   risk: ArtifactRisk;
+  riskSource: ArtifactRiskSource;
   coverage: Record<AnalyzerName, CoverageStatus>;
+  capaResult: JsonObject | null;
 }
-
 
 interface ArtifactTreeNode {
   name: string;
@@ -81,6 +85,7 @@ interface ArtifactTreeNode {
   artifact: ArtifactDisplay | null;
   fileCount: number;
   risk: ArtifactRisk;
+  riskSource: ArtifactRiskSource;
 }
 
 interface ScanResult {
@@ -93,7 +98,6 @@ interface ScanResult {
   artifacts?: ArtifactRecord[];
 }
 
-
 interface ScanState {
   scan_id: string;
   state: string;
@@ -104,7 +108,6 @@ interface ScanState {
   error: string | null;
 }
 
-
 interface CaseHistoryEntry {
   case_id: string;
   status: string;
@@ -113,12 +116,10 @@ interface CaseHistoryEntry {
   label: string;
 }
 
-
 interface CaseHistoryResponse {
   cases: CaseHistoryEntry[];
   truncated: boolean;
 }
-
 
 interface ScanSession {
   id: string;
@@ -132,7 +133,6 @@ interface ScanSession {
   resultsDirectory: string;
   persistedStatus: string | null;
 }
-
 
 const terminalStates = new Set([
   "completed",
@@ -157,51 +157,154 @@ const stageLabels: Record<StageName, string> = {
 };
 
 const sessions = new Map<string, ScanSession>();
+
 const sessionOrder: string[] = [];
 
 let activeScanId: string | null = null;
-let selectedScanId: string | null = null;
-let pollTimer: number | null = null;
-let serviceReady = false;
 
+let selectedScanId: string | null = null;
+
+let pollTimer: number | null = null;
+
+let serviceReady = false;
 
 function element<T extends HTMLElement>(
   id: string,
 ): T {
   const found = document.getElementById(id);
-
   if (found === null) {
     throw new Error(
       `Required element '${id}' was not found.`,
     );
   }
-
   return found as T;
 }
 
-
 const setupView = element<HTMLElement>("setup-view");
+
 const scanView = element<HTMLElement>("scan-view");
+
 const scanList = element<HTMLDivElement>("scan-list");
+
 const scanListEmpty = element<HTMLParagraphElement>(
   "scan-list-empty",
 );
+
 const scanCount = element<HTMLSpanElement>("scan-count");
+
 const newScanButton = element<HTMLButtonElement>("new-scan");
+
 const sourceInput = element<HTMLInputElement>("source-path");
+
 const resultsInput = element<HTMLInputElement>("results-path");
+
 const chooseSource = element<HTMLButtonElement>("choose-source");
+
 const chooseResults = element<HTMLButtonElement>("choose-results");
+
 const startButton = element<HTMLButtonElement>("start-scan");
+
 const cancelButton = element<HTMLButtonElement>("cancel-scan");
+
 const openCaseButton = element<HTMLButtonElement>("open-case");
+
 const fatalAlert = element<HTMLDivElement>("fatal-alert");
+
 const serviceBadge = element<HTMLSpanElement>("service-badge");
+
 const progressWrap = element<HTMLElement>("progress-wrap");
+
 const progressMessage = element<HTMLSpanElement>("progress-message");
+
 const progressState = element<HTMLSpanElement>("progress-state");
+
 const resultsSection = element<HTMLElement>("results-section");
 
+let artifactBlock: HTMLElement | null = null;
+
+let artifactPopoutButton: HTMLButtonElement | null = null;
+
+function setArtifactTreePoppedOut(
+  poppedOut: boolean,
+): void {
+  if (!artifactBlock || !artifactPopoutButton) {
+    return;
+  }
+  artifactBlock.classList.toggle(
+    "artifact-block-popped-out",
+    poppedOut,
+  );
+  document.body.classList.toggle(
+    "artifact-popout-open",
+    poppedOut,
+  );
+  artifactPopoutButton.setAttribute(
+    "aria-pressed",
+    String(poppedOut),
+  );
+  artifactPopoutButton.textContent = poppedOut
+    ? "Return to results"
+    : "Pop out tree";
+}
+
+function configureArtifactTreePopout(): void {
+  artifactBlock = document.querySelector<HTMLElement>(
+    ".artifact-block",
+  );
+  const heading = artifactBlock?.querySelector<HTMLElement>(
+    ".block-heading",
+  );
+  if (!artifactBlock || !heading) {
+    return;
+  }
+  const headerCells = artifactBlock.querySelectorAll<HTMLElement>(
+    ".artifact-tree-header span",
+  );
+  if (headerCells.length >= 3) {
+    headerCells[1].textContent = "Analysis coverage";
+    headerCells[2].textContent = "Assessment · source";
+  }
+  const actions = document.createElement("div");
+  actions.className = "artifact-heading-actions";
+  const legend = heading.querySelector<HTMLElement>(
+    ".artifact-legend",
+  );
+  if (legend) {
+    if (!legend.querySelector(".risk-unknown")) {
+      const unknown = document.createElement("span");
+      unknown.className = "risk-legend risk-unknown";
+      unknown.textContent = "Unknown";
+      legend.append(unknown);
+    }
+    actions.append(legend);
+  }
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "artifact-popout-button";
+  button.textContent = "Pop out tree";
+  button.setAttribute("aria-pressed", "false");
+  button.addEventListener("click", () => {
+    setArtifactTreePoppedOut(
+      !artifactBlock?.classList.contains(
+        "artifact-block-popped-out",
+      ),
+    );
+  });
+  actions.append(button);
+  heading.append(actions);
+  artifactPopoutButton = button;
+  document.addEventListener("keydown", (event) => {
+    if (
+      event.key === "Escape"
+      && artifactBlock?.classList.contains(
+        "artifact-block-popped-out",
+      )
+    ) {
+      setArtifactTreePoppedOut(false);
+      artifactPopoutButton?.focus();
+    }
+  });
+}
 
 async function api<T>(
   path: string,
@@ -215,14 +318,11 @@ async function api<T>(
       ...(options.headers ?? {}),
     },
   });
-
   if (!response.ok) {
     let message =
       `Request failed with status ${response.status}.`;
-
     try {
       const body = (await response.json()) as ApiErrorBody;
-
       if (typeof body.detail === "string") {
         message = body.detail;
       } else if (body.detail !== undefined) {
@@ -231,44 +331,36 @@ async function api<T>(
     } catch {
       // Retain the bounded generic message.
     }
-
     throw new Error(message);
   }
-
   return (await response.json()) as T;
 }
-
 
 function showError(message: string): void {
   fatalAlert.textContent = message;
   fatalAlert.classList.remove("d-none");
 }
 
-
 function clearError(): void {
   fatalAlert.textContent = "";
   fatalAlert.classList.add("d-none");
 }
 
-
 async function establishSession(): Promise<void> {
   const url = new URL(window.location.href);
   const token = url.searchParams.get("token");
-
   url.searchParams.delete("token");
   window.history.replaceState(
     {},
     "",
     `${url.pathname}${url.search}${url.hash}`,
   );
-
   if (!token) {
     await api<{ application_name: string }>(
       "/api/config",
     );
     return;
   }
-
   await api<{ ok: boolean }>("/api/session", {
     method: "POST",
     headers: {
@@ -278,15 +370,12 @@ async function establishSession(): Promise<void> {
   });
 }
 
-
 async function loadConfiguration(): Promise<void> {
   const config = await api<{
     default_results_directory: string;
   }>("/api/config");
-
   resultsInput.value = config.default_results_directory;
 }
-
 
 async function checkHealth(): Promise<void> {
   const health = await api<{
@@ -294,7 +383,6 @@ async function checkHealth(): Promise<void> {
     docker_version?: string;
     error?: string;
   }>("/api/health");
-
   if (health.ok) {
     serviceReady = true;
     serviceBadge.textContent =
@@ -303,7 +391,6 @@ async function checkHealth(): Promise<void> {
     updateControlState();
     return;
   }
-
   serviceReady = false;
   serviceBadge.textContent = "Docker unavailable";
   serviceBadge.className = "status-chip status-danger";
@@ -311,13 +398,11 @@ async function checkHealth(): Promise<void> {
   showError(health.error ?? "Docker preflight failed.");
 }
 
-
 async function selectDirectory(
   purpose: "source" | "results",
   input: HTMLInputElement,
 ): Promise<void> {
   clearError();
-
   const response = await api<{ path: string | null }>(
     "/api/dialogs/directory",
     {
@@ -328,23 +413,19 @@ async function selectDirectory(
       }),
     },
   );
-
   if (response.path) {
     input.value = response.path;
-
     if (purpose === "results") {
       await loadHistory();
     }
   }
 }
 
-
 function pathLabel(path: string): string {
-  const normalized = path.replaceAll("\\", "/");
+  const normalized = path.replaceAll("\\\\", "/");
   const pieces = normalized.split("/").filter(Boolean);
   return pieces.at(-1) ?? "Scan";
 }
-
 
 function statusText(session: ScanSession): string {
   if (
@@ -353,34 +434,26 @@ function statusText(session: ScanSession): string {
   ) {
     return session.state.state;
   }
-
   const resultStatus = session.state.result?.status;
-
   if (resultStatus) {
     return resultStatus.replaceAll("_", " ");
   }
-
   if (session.persistedStatus) {
     return session.persistedStatus.replaceAll("_", " ");
   }
-
   return session.state.state.replaceAll("_", " ");
 }
-
 
 function statusKind(session: ScanSession): string {
   if (session.state.state === "loading") {
     return "running";
   }
-
   if (session.state.state === "failed") {
     return "danger";
   }
-
   const value = session.state.result?.status
     ?? session.persistedStatus
     ?? session.state.state;
-
   if (
     value === "no_indicators_detected"
     || value === "clean"
@@ -388,7 +461,6 @@ function statusKind(session: ScanSession): string {
   ) {
     return "good";
   }
-
   if (
     value === "known_detection"
     || value === "high_concern"
@@ -396,26 +468,20 @@ function statusKind(session: ScanSession): string {
   ) {
     return "danger";
   }
-
   if (value === "cancelled") {
     return "muted";
   }
-
   if (value === "unknown") {
     return "muted";
   }
-
   if (value === "needs_review") {
     return "warning";
   }
-
   return "running";
 }
 
-
 function formatSessionTime(date: Date): string {
   const now = new Date();
-
   if (
     date.getFullYear() !== now.getFullYear()
     || date.getMonth() !== now.getMonth()
@@ -426,13 +492,11 @@ function formatSessionTime(date: Date): string {
       day: "numeric",
     });
   }
-
   return date.toLocaleTimeString([], {
     hour: "numeric",
     minute: "2-digit",
   });
 }
-
 
 function renderSessionList(): void {
   scanList.replaceChildren();
@@ -441,14 +505,11 @@ function renderSessionList(): void {
     "d-none",
     sessionOrder.length > 0,
   );
-
   for (const id of sessionOrder) {
     const session = sessions.get(id);
-
     if (!session) {
       continue;
     }
-
     const button = document.createElement("button");
     button.type = "button";
     button.className = "scan-tab";
@@ -457,21 +518,16 @@ function renderSessionList(): void {
       "aria-selected",
       String(selectedScanId === id),
     );
-
     const dot = document.createElement("span");
     dot.className = `scan-dot scan-dot-${statusKind(session)}`;
     dot.setAttribute("aria-hidden", "true");
-
     const copy = document.createElement("span");
     copy.className = "scan-tab-copy";
-
     const title = document.createElement("strong");
     title.textContent = session.label;
-
     const meta = document.createElement("small");
     meta.textContent =
       `${statusText(session)} · ${formatSessionTime(session.startedAt)}`;
-
     copy.append(title, meta);
     button.append(dot, copy);
     button.addEventListener("click", () => {
@@ -481,26 +537,21 @@ function renderSessionList(): void {
   }
 }
 
-
 async function loadHistory(): Promise<void> {
   const resultsDirectory = resultsInput.value;
-
   for (const [id, session] of sessions) {
     if (session.historical) {
       sessions.delete(id);
       const index = sessionOrder.indexOf(id);
-
       if (index >= 0) {
         sessionOrder.splice(index, 1);
       }
     }
   }
-
   if (!resultsDirectory) {
     renderSessionList();
     return;
   }
-
   const history = await api<CaseHistoryResponse>(
     "/api/cases",
     {
@@ -510,7 +561,6 @@ async function loadHistory(): Promise<void> {
       }),
     },
   );
-
   const knownCaseIds = new Set(
     Array.from(sessions.values())
       .map((session) =>
@@ -521,12 +571,10 @@ async function loadHistory(): Promise<void> {
         typeof value === "string",
       ),
   );
-
   for (const entry of history.cases) {
     if (knownCaseIds.has(entry.case_id)) {
       continue;
     }
-
     const id = `case:${entry.case_id}`;
     const startedAt = new Date(entry.created_at);
     const validStartedAt = Number.isNaN(
@@ -534,7 +582,6 @@ async function loadHistory(): Promise<void> {
     )
       ? new Date()
       : startedAt;
-
     sessions.set(id, {
       id,
       label: entry.label,
@@ -556,10 +603,8 @@ async function loadHistory(): Promise<void> {
     });
     sessionOrder.push(id);
   }
-
   renderSessionList();
 }
-
 
 function updateControlState(): void {
   const scanning = activeScanId !== null;
@@ -569,35 +614,30 @@ function updateControlState(): void {
   startButton.disabled = scanning || !serviceReady;
 }
 
-
 function showSetup(resetSource = false): void {
   clearError();
+  setArtifactTreePoppedOut(false);
   selectedScanId = null;
   setupView.classList.remove("d-none");
   scanView.classList.add("d-none");
-
   if (resetSource) {
     sourceInput.value = "";
   }
-
   renderSessionList();
   updateControlState();
 }
-
 
 async function selectSession(id: string): Promise<void> {
   if (!sessions.has(id)) {
     return;
   }
-
   clearError();
+  setArtifactTreePoppedOut(false);
   selectedScanId = id;
   setupView.classList.add("d-none");
   scanView.classList.remove("d-none");
   renderSessionList();
-
   const session = sessions.get(id);
-
   if (
     session?.historical
     && !session.loaded
@@ -607,7 +647,6 @@ async function selectSession(id: string): Promise<void> {
     session.state.message = "Loading saved report...";
     renderSessionList();
     renderSelectedSession();
-
     try {
       session.state = await api<ScanState>(
         `/api/cases/${session.caseId}`,
@@ -627,76 +666,61 @@ async function selectSession(id: string): Promise<void> {
       const message = error instanceof Error
         ? error.message
         : String(error);
-
       session.state.state = "failed";
       session.state.error = message;
       session.state.message = message;
     }
-
     renderSessionList();
   }
-
   renderSelectedSession();
 }
-
 
 function renderSelectedSession(): void {
   if (!selectedScanId) {
     return;
   }
-
   const session = sessions.get(selectedScanId);
-
   if (!session) {
     return;
   }
-
   element("scan-title").textContent = session.label;
   const result = session.state.result;
   element("case-id").textContent = result?.case_id
     ?? session.state.scan_id;
-
   const verdict = element("verdict-badge");
   verdict.textContent = statusText(session).toUpperCase();
   verdict.className =
     `verdict verdict-${statusKind(session)}`;
-
   const terminal = terminalStates.has(session.state.state);
   progressWrap.classList.toggle("d-none", terminal);
   cancelButton.classList.toggle(
     "d-none",
     session.id !== activeScanId,
   );
-
   if (!terminal) {
     resultsSection.classList.add("d-none");
     renderProgress(session.state);
     openCaseButton.classList.add("d-none");
     return;
   }
-
   if (session.state.state === "completed" && result) {
     renderResult(session.state);
     openCaseButton.classList.remove("d-none");
     return;
   }
-
   resultsSection.classList.add("d-none");
   openCaseButton.classList.add("d-none");
   showError(session.state.error ?? session.state.message);
 }
 
-
 async function startScan(): Promise<void> {
   clearError();
-
   if (!sourceInput.value || !resultsInput.value) {
     showError(
       "Choose both a source folder and a results folder.",
     );
     return;
   }
-
   try {
     const sourcePath = sourceInput.value;
     const state = await api<ScanState>("/api/scans", {
@@ -706,7 +730,6 @@ async function startScan(): Promise<void> {
         results_directory: resultsInput.value,
       }),
     });
-
     const session: ScanSession = {
       id: state.scan_id,
       label: pathLabel(sourcePath),
@@ -719,7 +742,6 @@ async function startScan(): Promise<void> {
       resultsDirectory: resultsInput.value,
       persistedStatus: null,
     };
-
     sessions.set(session.id, session);
     sessionOrder.unshift(session.id);
     activeScanId = session.id;
@@ -734,20 +756,16 @@ async function startScan(): Promise<void> {
   }
 }
 
-
 async function cancelScan(): Promise<void> {
   if (!activeScanId) {
     return;
   }
-
   cancelButton.disabled = true;
-
   try {
     const state = await api<ScanState>(
       `/api/scans/${activeScanId}`,
       { method: "DELETE" },
     );
-
     updateSession(state);
   } catch (error) {
     showError(
@@ -758,38 +776,30 @@ async function cancelScan(): Promise<void> {
   }
 }
 
-
 function schedulePoll(delay: number): void {
   if (pollTimer !== null) {
     window.clearTimeout(pollTimer);
   }
-
   pollTimer = window.setTimeout(
     () => void pollScan(),
     delay,
   );
 }
 
-
 async function pollScan(): Promise<void> {
   const scanId = activeScanId;
-
   if (!scanId) {
     return;
   }
-
   try {
     const state = await api<ScanState>(
       `/api/scans/${scanId}`,
     );
-
     updateSession(state);
-
     if (terminalStates.has(state.state)) {
       finishScan(state);
       return;
     }
-
     schedulePoll(750);
   } catch (error) {
     activeScanId = null;
@@ -800,17 +810,13 @@ async function pollScan(): Promise<void> {
   }
 }
 
-
 function updateSession(state: ScanState): void {
   const session = sessions.get(state.scan_id);
-
   if (!session) {
     return;
   }
-
   session.state = state;
   renderSessionList();
-
   if (selectedScanId === state.scan_id) {
     renderSelectedSession();
   }
@@ -820,27 +826,20 @@ function stageStatusText(status: StageStatus): string {
   switch (status) {
     case "waiting":
       return "Waiting";
-
     case "running":
       return "Running";
-
     case "completed":
       return "Completed";
-
     case "incomplete":
       return "Incomplete";
-
     case "unavailable":
       return "Unavailable";
-
     case "error":
       return "Error";
-
     case "cancelled":
       return "Cancelled";
   }
 }
-
 
 function renderStageTracker(state: ScanState): void {
   for (const stage of stageOrder) {
@@ -851,15 +850,12 @@ function renderStageTracker(state: ScanState): void {
     const statusElement = element<HTMLElement>(
       `stage-${stage}-status`,
     );
-
     row.className =
       `stage-step stage-state-${status}`;
-
     row.setAttribute(
       "aria-label",
       `${stageLabels[stage]}: ${stageStatusText(status)}`,
     );
-
     statusElement.textContent =
       stageStatusText(status);
   }
@@ -872,18 +868,15 @@ function renderProgress(state: ScanState): void {
     state.state.toUpperCase();
 }
 
-
 function finishScan(state: ScanState): void {
   updateSession(state);
   activeScanId = null;
   updateControlState();
   renderSessionList();
-
   if (selectedScanId === state.scan_id) {
     renderSelectedSession();
   }
 }
-
 
 function objectValue(value: unknown): JsonObject | null {
   if (
@@ -893,10 +886,8 @@ function objectValue(value: unknown): JsonObject | null {
   ) {
     return value as JsonObject;
   }
-
   return null;
 }
-
 
 function numberValue(value: unknown): string {
   return typeof value === "number"
@@ -904,17 +895,14 @@ function numberValue(value: unknown): string {
     : "—";
 }
 
-
 function analyzer(
   report: JsonObject,
   name: string,
 ): JsonObject | null {
   const direct = objectValue(report[name]);
-
   if (direct) {
     return direct;
   }
-
   for (const groupName of [
     "analysis",
     "analyses",
@@ -922,15 +910,12 @@ function analyzer(
   ]) {
     const group = objectValue(report[groupName]);
     const match = group ? objectValue(group[name]) : null;
-
     if (match) {
       return match;
     }
   }
-
   return null;
 }
-
 
 function analyzerStatus(
   data: JsonObject | null,
@@ -938,20 +923,16 @@ function analyzerStatus(
   if (!data) {
     return "Completed";
   }
-
   if (data.complete === false) {
     return "Incomplete";
   }
-
   const value = typeof data.status === "string"
     ? data.status
     : "completed";
-
   return value
     .replaceAll("_", " ")
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
-
 
 function analyzerDescription(
   data: JsonObject | null,
@@ -960,11 +941,9 @@ function analyzerDescription(
   if (!data) {
     return "See full report";
   }
-
   if (typeof data.error === "string" && data.error) {
     return data.error;
   }
-
   if (name === "clamav") {
     const findings = Array.isArray(data.findings)
       ? data.findings.length
@@ -973,7 +952,6 @@ function analyzerDescription(
       ? "No signature matches"
       : `${findings.toLocaleString()} signature match${findings === 1 ? "" : "es"}`;
   }
-
    if (name === "capa") {
     const count = data.capability_count
       ?? data.total_capabilities;
@@ -982,26 +960,21 @@ function analyzerDescription(
     const level = typeof risk?.level === "string"
       ? risk.level.replaceAll("_", " ")
       : null;
-
     if (typeof count !== "number") {
       return "See full report";
     }
-
     const matchSummary =
       `${count.toLocaleString()} capability match${count === 1 ? "" : "es"}`;
-
     return typeof score === "number" && level
       ? `${matchSummary} · risk ${score.toLocaleString()} (${level})`
       : matchSummary;
   }
-
   const strings = data.extracted_string_count
     ?? data.total_string_count;
   return typeof strings === "number"
     ? `${strings.toLocaleString()} extracted string${strings === 1 ? "" : "s"}`
     : "See full report";
 }
-
 
 function setStage(
   name: "clamav" | "capa" | "floss",
@@ -1022,14 +995,11 @@ function analyzerResultMap(
 ): Map<string, JsonObject> {
   const results = data?.results;
   const mapped = new Map<string, JsonObject>();
-
   if (!Array.isArray(results)) {
     return mapped;
   }
-
   for (const value of results) {
     const result = objectValue(value);
-
     if (
       result
       && typeof result.relative_path === "string"
@@ -1040,17 +1010,14 @@ function analyzerResultMap(
       );
     }
   }
-
   return mapped;
 }
-
 
 function pathMatches(
   candidate: string,
   relativePath: string,
 ): boolean {
-  const normalized = candidate.replaceAll("\\", "/");
-
+  const normalized = candidate.replaceAll("\\\\", "/");
   return (
     normalized === relativePath
     || normalized.endsWith(`/${relativePath}`)
@@ -1059,17 +1026,14 @@ function pathMatches(
   );
 }
 
-
 function clamavHasFinding(
   data: JsonObject | null,
   relativePath: string,
 ): boolean {
   const findings = data?.findings;
-
   if (!Array.isArray(findings)) {
     return false;
   }
-
   for (const finding of findings) {
     if (
       typeof finding === "string"
@@ -1077,13 +1041,10 @@ function clamavHasFinding(
     ) {
       return true;
     }
-
     const object = objectValue(finding);
-
     if (!object) {
       continue;
     }
-
     for (const key of [
       "relative_path",
       "path",
@@ -1091,7 +1052,6 @@ function clamavHasFinding(
       "filename",
     ]) {
       const candidate = object[key];
-
       if (
         typeof candidate === "string"
         && pathMatches(candidate, relativePath)
@@ -1100,10 +1060,8 @@ function clamavHasFinding(
       }
     }
   }
-
   return false;
 }
-
 
 function analyzerCoverage(
   analyzerData: JsonObject | null,
@@ -1113,91 +1071,130 @@ function analyzerCoverage(
   if (!eligible) {
     return "not-applicable";
   }
-
   if (!analyzerData) {
     return "unavailable";
   }
-
   if (analyzerData.status === "not_run") {
     return "unavailable";
   }
-
   if (analyzerData.status === "error") {
     return "error";
   }
-
   if (fileResult) {
     if (fileResult.status === "error") {
       return "error";
     }
-
     return fileResult.complete === true
       ? "completed"
       : "incomplete";
   }
-
   return analyzerData.complete === true
     ? "incomplete"
     : "incomplete";
 }
 
+function coverageHasGap(
+  coverage: Record<AnalyzerName, CoverageStatus>,
+): boolean {
+  return Object.values(coverage).some((status) =>
+    status === "incomplete"
+    || status === "unavailable"
+    || status === "error",
+  );
+}
 
-function artifactRisk(
+function completedCoverageSource(
+  coverage: Record<AnalyzerName, CoverageStatus>,
+): ArtifactRiskSource {
+  const completed = (
+    Object.entries(coverage) as Array<
+      [AnalyzerName, CoverageStatus]
+    >
+  ).filter(([, status]) => status === "completed");
+  if (completed.length > 1) {
+    return "all-tools";
+  }
+  return completed[0]?.[0] ?? "coverage";
+}
+
+function artifactAssessment(
   artifact: ArtifactRecord,
   clamavFinding: boolean,
   capaResult: JsonObject | null,
-): ArtifactRisk {
+  coverage: Record<AnalyzerName, CoverageStatus>,
+): {
+  risk: ArtifactRisk;
+  source: ArtifactRiskSource;
+} {
   if (clamavFinding) {
-    return "high";
+    return {
+      risk: "high",
+      source: "clamav",
+    };
   }
-
   if (
     artifact.error
     || artifact.review_flags > 0
   ) {
-    return "medium";
+    return {
+      risk: "medium",
+      source: "inventory",
+    };
   }
-
   const risk = objectValue(capaResult?.risk);
-
   if (risk) {
     const level = typeof risk.level === "string"
       ? risk.level.toLowerCase()
       : "";
-
     if (
       risk.high_concern === true
       || level.includes("high")
     ) {
-      return "high";
+      return {
+        risk: "high",
+        source: "capa",
+      };
     }
-
     if (
       risk.review_required === true
       || level === "medium"
       || level === "review"
     ) {
-      return "medium";
+      return {
+        risk: "medium",
+        source: "capa",
+      };
     }
-
     if (
       typeof risk.score === "number"
       && risk.score > 0
     ) {
-      return "low";
+      return {
+        risk: "low",
+        source: "capa",
+      };
     }
   }
-
   if (
     typeof capaResult?.capability_count === "number"
     && capaResult.capability_count > 0
   ) {
-    return "low";
+    return {
+      risk: "low",
+      source: "capa",
+    };
   }
-
-  return "clean";
+  if (coverageHasGap(coverage)) {
+    return {
+      risk: "unknown",
+      source: "coverage",
+    };
+  }
+  return {
+    risk: "clean",
+    source: completedCoverageSource(coverage),
+  };
 }
-
 
 function artifactDisplayRecords(
   result: ScanResult,
@@ -1209,7 +1206,6 @@ function artifactDisplayRecords(
   const floss = analyzer(report, "floss");
   const capaResults = analyzerResultMap(capa);
   const flossResults = analyzerResultMap(floss);
-
   return artifacts.map((artifact) => {
     const relativePath = artifact.relative_path;
     const capaResult =
@@ -1236,9 +1232,7 @@ function artifactDisplayRecords(
         routingClass,
       )
     );
-
     let clamavCoverage: CoverageStatus;
-
     if (!regularFile) {
       clamavCoverage = "not-applicable";
     } else if (hasClamavFinding) {
@@ -1252,31 +1246,34 @@ function artifactDisplayRecords(
     } else {
       clamavCoverage = "incomplete";
     }
-
+    const coverage: Record<AnalyzerName, CoverageStatus> = {
+      clamav: clamavCoverage,
+      capa: analyzerCoverage(
+        capa,
+        capaResult,
+        regularFile && capaEligible,
+      ),
+      floss: analyzerCoverage(
+        floss,
+        flossResult,
+        regularFile && flossEligible,
+      ),
+    };
+    const assessment = artifactAssessment(
+      artifact,
+      hasClamavFinding,
+      capaResult,
+      coverage,
+    );
     return {
       artifact,
-      risk: artifactRisk(
-        artifact,
-        hasClamavFinding,
-        capaResult,
-      ),
-      coverage: {
-        clamav: clamavCoverage,
-        capa: analyzerCoverage(
-          capa,
-          capaResult,
-          regularFile && capaEligible,
-        ),
-        floss: analyzerCoverage(
-          floss,
-          flossResult,
-          regularFile && flossEligible,
-        ),
-      },
+      risk: assessment.risk,
+      riskSource: assessment.source,
+      coverage,
+      capaResult,
     };
   });
 }
-
 
 function makeTreeNode(
   name: string,
@@ -1291,9 +1288,9 @@ function makeTreeNode(
     artifact: null,
     fileCount: 0,
     risk: "clean",
+    riskSource: null,
   };
 }
-
 
 function buildArtifactTree(
   artifacts: ArtifactDisplay[],
@@ -1303,24 +1300,19 @@ function buildArtifactTree(
     "",
     true,
   );
-
   for (const display of artifacts) {
     const pieces = display.artifact.relative_path
       .split("/")
       .filter(Boolean);
-
     let current = root;
     let currentPath = "";
-
     pieces.forEach((piece, index) => {
       currentPath = currentPath
         ? `${currentPath}/${piece}`
         : piece;
-
       const finalPiece =
         index === pieces.length - 1;
       let child = current.children.get(piece);
-
       if (!child) {
         child = makeTreeNode(
           piece,
@@ -1329,28 +1321,24 @@ function buildArtifactTree(
         );
         current.children.set(piece, child);
       }
-
       if (finalPiece) {
         child.directory = false;
         child.artifact = display;
       }
-
       current = child;
     });
   }
-
   summarizeTree(root);
   return root;
 }
 
-
 const riskRanks: Record<ArtifactRisk, number> = {
+  unknown: -1,
   clean: 0,
   low: 1,
   medium: 2,
   high: 3,
 };
-
 
 function highestRisk(
   first: ArtifactRisk,
@@ -1361,29 +1349,40 @@ function highestRisk(
     : first;
 }
 
-
 function summarizeTree(
   node: ArtifactTreeNode,
 ): void {
   if (!node.directory) {
     node.fileCount = 1;
     node.risk = node.artifact?.risk ?? "clean";
+    node.riskSource = node.artifact?.riskSource ?? null;
     return;
   }
-
   node.fileCount = 0;
   node.risk = "clean";
-
+  node.riskSource = "child";
   for (const child of node.children.values()) {
     summarizeTree(child);
     node.fileCount += child.fileCount;
+    const previousRisk: ArtifactRisk = node.risk;
     node.risk = highestRisk(
       node.risk,
       child.risk,
     );
+    if (node.risk !== previousRisk) {
+      node.riskSource = "child";
+    }
+  }
+  if (
+    node.risk === "clean"
+    && Array.from(node.children.values()).some(
+      (child) => child.risk === "unknown",
+    )
+  ) {
+    node.risk = "unknown";
+    node.riskSource = "child";
   }
 }
-
 
 function formatBytes(
   bytes: number | null,
@@ -1391,22 +1390,17 @@ function formatBytes(
   if (bytes === null) {
     return "Unknown size";
   }
-
   if (bytes < 1024) {
     return `${bytes} B`;
   }
-
   if (bytes < 1024 ** 2) {
     return `${(bytes / 1024).toFixed(1)} KB`;
   }
-
   if (bytes < 1024 ** 3) {
     return `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   }
-
   return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
 }
-
 
 function coverageLabel(
   status: CoverageStatus,
@@ -1414,34 +1408,81 @@ function coverageLabel(
   switch (status) {
     case "completed":
       return "Completed";
-
     case "finding":
       return "Finding";
-
     case "incomplete":
       return "Incomplete";
-
     case "unavailable":
       return "Unavailable";
-
     case "not-applicable":
       return "Not applicable";
-
     case "error":
       return "Error";
   }
 }
 
+function coverageShortLabel(
+  status: CoverageStatus,
+): string {
+  switch (status) {
+    case "completed":
+      return "DONE";
+    case "finding":
+      return "FINDING";
+    case "incomplete":
+      return "PARTIAL";
+    case "unavailable":
+      return "UNAVAILABLE";
+    case "not-applicable":
+      return "N/A";
+    case "error":
+      return "FAILED";
+  }
+}
+
+function analyzerLabel(name: AnalyzerName): string {
+  if (name === "clamav") {
+    return "ClamAV";
+  }
+  if (name === "floss") {
+    return "FLOSS";
+  }
+  return "capa";
+}
+
+function riskSourceLabel(
+  source: ArtifactRiskSource,
+): string | null {
+  switch (source) {
+    case "clamav":
+    case "capa":
+    case "floss":
+      return analyzerLabel(source);
+    case "inventory":
+      return "inventory";
+    case "coverage":
+      return "coverage";
+    case "all-tools":
+      return "all tools";
+    case "child":
+      return "child";
+    case null:
+      return null;
+  }
+}
 
 function createRiskBadge(
   risk: ArtifactRisk,
+  source: ArtifactRiskSource,
 ): HTMLSpanElement {
   const badge = document.createElement("span");
   badge.className = `artifact-risk artifact-risk-${risk}`;
-  badge.textContent = risk;
+  const sourceLabel = riskSourceLabel(source);
+  badge.textContent = sourceLabel
+    ? `${risk} · ${sourceLabel}`
+    : risk;
   return badge;
 }
-
 
 function createCoverageBadge(
   name: AnalyzerName,
@@ -1450,13 +1491,11 @@ function createCoverageBadge(
   const badge = document.createElement("span");
   badge.className =
     `tool-badge tool-state-${status}`;
-  badge.textContent = name === "clamav"
-    ? "ClamAV"
-    : name === "floss"
-      ? "FLOSS"
-      : "capa";
+  const label = analyzerLabel(name);
+  badge.textContent =
+    `${label} · ${coverageShortLabel(status)}`;
   badge.title =
-    `${badge.textContent}: ${coverageLabel(status)}`;
+    `${label}: ${coverageLabel(status)}`;
   badge.setAttribute(
     "aria-label",
     badge.title,
@@ -1464,6 +1503,88 @@ function createCoverageBadge(
   return badge;
 }
 
+function capaCapabilityNames(
+  result: JsonObject | null,
+): string[] {
+  const capabilities = result?.capabilities;
+  if (!Array.isArray(capabilities)) {
+    return [];
+  }
+  const names: string[] = [];
+  for (const value of capabilities) {
+    const capability = objectValue(value);
+    if (
+      capability
+      && typeof capability.name === "string"
+      && !names.includes(capability.name)
+    ) {
+      names.push(capability.name);
+    }
+  }
+  return names;
+}
+
+function artifactAssessmentExplanation(
+  display: ArtifactDisplay,
+): string {
+  if (display.riskSource === "clamav") {
+    return "ClamAV reported a signature match for this file.";
+  }
+  if (display.riskSource === "inventory") {
+    return display.artifact.error
+      ? `Inventory error: ${display.artifact.error}`
+      : `${display.artifact.review_flags.toLocaleString()} inventory review flag${display.artifact.review_flags === 1 ? "" : "s"} recorded.`;
+  }
+  if (display.riskSource === "capa") {
+    const risk = objectValue(display.capaResult?.risk);
+    const score = typeof risk?.score === "number"
+      ? ` Weighted score: ${risk.score.toLocaleString()}.`
+      : "";
+    const capabilities = capaCapabilityNames(
+      display.capaResult,
+    );
+    const names = capabilities.length > 0
+      ? ` Matches: ${capabilities.slice(0, 3).join(", ")}${capabilities.length > 3 ? ", …" : ""}.`
+      : "";
+    return `capa capability weighting produced this assessment.${score}${names}`;
+  }
+  if (display.risk === "unknown") {
+    return "One or more applicable analyzers did not complete, so this file cannot be presented as clean.";
+  }
+  return "No indicators were reported by the analyzers that apply to this file.";
+}
+
+function createArtifactDetail(
+  display: ArtifactDisplay,
+): HTMLDivElement {
+  const detail = document.createElement("div");
+  detail.className = "artifact-detail";
+  detail.hidden = true;
+  const heading = document.createElement("strong");
+  const source = riskSourceLabel(display.riskSource);
+  heading.textContent = source
+    ? `${display.risk.toUpperCase()} · ${source}`
+    : display.risk.toUpperCase();
+  const explanation = document.createElement("p");
+  explanation.textContent = artifactAssessmentExplanation(display);
+  const coverage = document.createElement("p");
+  coverage.className = "artifact-detail-coverage";
+  coverage.textContent = (
+    Object.entries(display.coverage) as Array<
+      [AnalyzerName, CoverageStatus]
+    >
+  ).map(([name, status]) =>
+    `${analyzerLabel(name)} ${coverageShortLabel(status)}`,
+  ).join(" · ");
+  detail.append(heading, explanation, coverage);
+  if (display.artifact.sha256) {
+    const hash = document.createElement("code");
+    hash.className = "artifact-detail-hash";
+    hash.textContent = `SHA-256 ${display.artifact.sha256}`;
+    detail.append(hash);
+  }
+  return detail;
+}
 
 function sortedTreeChildren(
   node: ArtifactTreeNode,
@@ -1473,7 +1594,6 @@ function sortedTreeChildren(
       if (first.directory !== second.directory) {
         return first.directory ? -1 : 1;
       }
-
       return first.name.localeCompare(
         second.name,
         undefined,
@@ -1486,14 +1606,12 @@ function sortedTreeChildren(
   );
 }
 
-
 function renderArtifactNode(
   node: ArtifactTreeNode,
   depth: number,
 ): HTMLDivElement {
   const wrapper = document.createElement("div");
   wrapper.className = "artifact-node";
-
   const row = document.createElement("div");
   row.className = node.directory
     ? "artifact-row artifact-directory-row"
@@ -1502,26 +1620,20 @@ function renderArtifactNode(
     "--artifact-depth",
     String(depth),
   );
-
   const pathCell = document.createElement("div");
   pathCell.className = "artifact-path-cell";
-
   const icon = document.createElement("span");
   icon.className = node.directory
     ? "artifact-icon artifact-icon-directory"
     : "artifact-icon artifact-icon-file";
   icon.textContent = node.directory ? "D" : "F";
   icon.setAttribute("aria-hidden", "true");
-
   const nameCopy = document.createElement("span");
   nameCopy.className = "artifact-name-copy";
-
   const name = document.createElement("strong");
   name.textContent = node.name;
   name.title = node.path;
-
   const metadata = document.createElement("small");
-
   if (node.directory) {
     metadata.textContent =
       `${node.fileCount.toLocaleString()} `
@@ -1535,14 +1647,11 @@ function renderArtifactNode(
       (value): value is string =>
         typeof value === "string" && value.length > 0,
     );
-
     metadata.textContent = details.join(" · ");
   }
-
   nameCopy.append(name, metadata);
-
   let children: HTMLDivElement | null = null;
-
+  let detail: HTMLDivElement | null = null;
   if (node.directory) {
     const toggle = document.createElement("button");
     toggle.type = "button";
@@ -1553,17 +1662,13 @@ function renderArtifactNode(
       "aria-label",
       `Collapse ${node.path}`,
     );
-
     pathCell.append(toggle, icon, nameCopy);
-
     children = document.createElement("div");
     children.className = "artifact-children";
-
     toggle.addEventListener("click", () => {
       if (!children) {
         return;
       }
-
       const collapsed = !children.hidden;
       children.hidden = collapsed;
       toggle.textContent = collapsed ? "▸" : "▾";
@@ -1577,14 +1682,42 @@ function renderArtifactNode(
       );
     });
   } else {
-    const spacer = document.createElement("span");
-    spacer.className = "artifact-toggle-spacer";
-    pathCell.append(spacer, icon, nameCopy);
+    const toggle = document.createElement("button");
+    toggle.type = "button";
+    toggle.className = "artifact-toggle artifact-file-detail-toggle";
+    toggle.textContent = "▸";
+    toggle.setAttribute("aria-expanded", "false");
+    toggle.setAttribute(
+      "aria-label",
+      `Show details for ${node.path}`,
+    );
+    if (node.artifact) {
+      detail = createArtifactDetail(node.artifact);
+      toggle.addEventListener("click", () => {
+        if (!detail) {
+          return;
+        }
+        const shouldExpand = detail.hidden !== false;
+        detail.hidden = !shouldExpand;
+        toggle.textContent = shouldExpand ? "▾" : "▸";
+        toggle.setAttribute(
+          "aria-expanded",
+          String(shouldExpand),
+        );
+        toggle.setAttribute(
+          "aria-label", 
+          `${shouldExpand ? "Hide" : "Show"} details for ${node.path}`,
+        );
+        row.classList.toggle(
+          "artifact-row-expanded",
+          shouldExpand,
+        );
+      });
+    }
+    pathCell.append(toggle, icon, nameCopy);
   }
-
   const coverageCell = document.createElement("div");
   coverageCell.className = "artifact-coverage-cell";
-
   if (node.artifact) {
     for (const analyzerName of [
       "clamav",
@@ -1593,15 +1726,12 @@ function renderArtifactNode(
     ] as const) {
       const status =
         node.artifact.coverage[analyzerName];
-
-      if (status !== "not-applicable") {
-        coverageCell.append(
-          createCoverageBadge(
-            analyzerName,
-            status,
-          ),
-        );
-      }
+      coverageCell.append(
+        createCoverageBadge(
+          analyzerName,
+          status,
+        ),
+      );
     }
   } else {
     const summary = document.createElement("span");
@@ -1610,18 +1740,23 @@ function renderArtifactNode(
       `${node.fileCount.toLocaleString()} inventoried`;
     coverageCell.append(summary);
   }
-
   const riskCell = document.createElement("div");
   riskCell.className = "artifact-risk-cell";
-  riskCell.append(createRiskBadge(node.risk));
-
+  riskCell.append(
+    createRiskBadge(
+      node.risk,
+      node.riskSource,
+    ),
+  );
   row.append(
     pathCell,
     coverageCell,
     riskCell,
   );
   wrapper.append(row);
-
+  if (detail) {
+    wrapper.append(detail);
+  }
   if (children) {
     for (const child of sortedTreeChildren(node)) {
       children.append(
@@ -1631,13 +1766,10 @@ function renderArtifactNode(
         ),
       );
     }
-
     wrapper.append(children);
   }
-
   return wrapper;
 }
-
 
 function renderArtifactTree(
   result: ScanResult,
@@ -1649,24 +1781,18 @@ function renderArtifactTree(
     "artifact-tree-empty",
   );
   const records = artifactDisplayRecords(result);
-
   element("artifact-count").textContent =
     `${records.length.toLocaleString()} `
     + `file${records.length === 1 ? "" : "s"}`;
-
   tree.replaceChildren();
-
   if (records.length === 0) {
     tree.classList.add("d-none");
     empty.classList.remove("d-none");
     return;
   }
-
   tree.classList.remove("d-none");
   empty.classList.add("d-none");
-
   const root = buildArtifactTree(records);
-
   for (const child of sortedTreeChildren(root)) {
     tree.append(
       renderArtifactNode(
@@ -1679,17 +1805,14 @@ function renderArtifactTree(
 
 function renderResult(state: ScanState): void {
   const result = state.result;
-
   if (!result) {
     return;
   }
-
   const report = result.report;
   const summary = objectValue(report.summary) ?? {};
   const clamav = analyzer(report, "clamav");
   const capa = analyzer(report, "capa");
   const floss = analyzer(report, "floss");
-
   element("metric-files").textContent =
     numberValue(summary.regular_files);
   element("metric-hashed").textContent =
@@ -1700,21 +1823,17 @@ function renderResult(state: ScanState): void {
   element("metric-floss").textContent = numberValue(
     floss?.extracted_string_count ?? floss?.total_string_count,
   );
-
   renderArtifactTree(result);
-
   element("inventory-summary").textContent =
     `${numberValue(summary.hashed_files)} files hashed`;
   setStage("clamav", clamav);
   setStage("capa", capa);
   setStage("floss", floss);
-
   const incompleteReasons = report.incomplete_reasons;
   element("coverage-label").textContent =
     Array.isArray(incompleteReasons) && incompleteReasons.length > 0
       ? `${incompleteReasons.length} coverage gap${incompleteReasons.length === 1 ? "" : "s"}`
       : "All configured stages completed";
-
   element("report-panel").textContent = result.report_markdown;
   element("activity-panel").textContent = state.events
     .map((event) =>
@@ -1726,23 +1845,18 @@ function renderResult(state: ScanState): void {
     null,
     2,
   );
-
   progressWrap.classList.add("d-none");
   resultsSection.classList.remove("d-none");
 }
-
 
 async function openCase(): Promise<void> {
   if (!selectedScanId) {
     return;
   }
-
   const session = sessions.get(selectedScanId);
-
   if (!session) {
     return;
   }
-
   try {
     if (session.historical && session.caseId) {
       await api<{ ok: boolean }>(
@@ -1757,7 +1871,6 @@ async function openCase(): Promise<void> {
       );
       return;
     }
-
     await api<{ ok: boolean }>(
       `/api/scans/${selectedScanId}/open-folder`,
       {
@@ -1772,17 +1885,14 @@ async function openCase(): Promise<void> {
   }
 }
 
-
 function configureOutputTabs(): void {
   const buttons =
     document.querySelectorAll<HTMLButtonElement>("[data-panel]");
-
   buttons.forEach((button) => {
     button.addEventListener("click", () => {
       buttons.forEach((item) => {
         item.classList.toggle("active", item === button);
       });
-
       document
         .querySelectorAll<HTMLElement>(".output-panel")
         .forEach((panel) => {
@@ -1795,16 +1905,14 @@ function configureOutputTabs(): void {
   });
 }
 
-
 async function initialize(): Promise<void> {
   updateControlState();
   configureOutputTabs();
+  configureArtifactTreePopout();
   renderSessionList();
-
   newScanButton.addEventListener("click", () => {
     showSetup(true);
   });
-
   chooseSource.addEventListener("click", () => {
     void selectDirectory("source", sourceInput).catch(
       (error: unknown) => showError(
@@ -1812,7 +1920,6 @@ async function initialize(): Promise<void> {
       ),
     );
   });
-
   chooseResults.addEventListener("click", () => {
     void selectDirectory("results", resultsInput).catch(
       (error: unknown) => showError(
@@ -1820,15 +1927,12 @@ async function initialize(): Promise<void> {
       ),
     );
   });
-
   startButton.addEventListener("click", () => void startScan());
   cancelButton.addEventListener("click", () => void cancelScan());
   openCaseButton.addEventListener("click", () => void openCase());
-
   try {
     await establishSession();
     await loadConfiguration();
-
     try {
       await loadHistory();
     } catch (error) {
@@ -1841,7 +1945,6 @@ async function initialize(): Promise<void> {
         ),
       );
     }
-
     await checkHealth();
   } catch (error) {
     serviceBadge.textContent = "Session unavailable";
@@ -1851,6 +1954,4 @@ async function initialize(): Promise<void> {
     );
   }
 }
-
-
 void initialize();
