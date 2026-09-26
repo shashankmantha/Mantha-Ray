@@ -89,25 +89,117 @@ Mantha Ray currently targets Linux.
 
 Required software:
 
-* Git
-* Python 3
-* Python virtual-environment support
-* Docker
-* Node.js
-* npm
+- Git
+- Python 3
+- Python virtual-environment support
+- Tkinter
+- Docker Engine and the Docker CLI
 
-Docker must be running and accessible to the current user.
+Node.js and npm are only required when modifying or rebuilding the frontend. The repository includes compiled frontend assets for normal installation.
 
-Check the required tools:
+### Fedora and Nobara
+
+Install the required system packages:
+
+```bash
+sudo dnf install \
+  git \
+  python3 \
+  python3-pip \
+  python3-tkinter \
+  docker-cli \
+  moby-engine
+```
+
+Start Docker and enable it at boot:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+Add the current user to the Docker group:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Log out and back in before continuing so the new group membership takes effect.
+
+### Ubuntu and Debian
+
+Install the required system packages:
+
+```bash
+sudo apt update
+
+sudo apt install \
+  git \
+  python3 \
+  python3-venv \
+  python3-pip \
+  python3-tk \
+  docker.io
+```
+
+Start Docker and enable it at boot:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+Add the current user to the Docker group:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Log out and back in before continuing.
+
+### Arch Linux
+
+Install the required system packages:
+
+```bash
+sudo pacman -S --needed \
+  git \
+  python \
+  python-pip \
+  tk \
+  docker
+```
+
+Start Docker and enable it at boot:
+
+```bash
+sudo systemctl enable --now docker
+```
+
+Add the current user to the Docker group:
+
+```bash
+sudo usermod -aG docker "$USER"
+```
+
+Log out and back in before continuing.
+
+### Verify the prerequisites
+
+Confirm that Python and Docker are available:
 
 ```bash
 git --version
 python3 --version
 docker --version
 docker info
-node --version
-npm --version
 ```
+
+Test ordinary-user access to Docker:
+
+```bash
+docker run --rm hello-world
+```
+
+Do not run Mantha Ray with `sudo`. The application expects the current user to have direct access to Docker.
 
 Access to the Docker daemon is security-sensitive. Membership in the Docker group is effectively equivalent to elevated host access.
 
@@ -127,14 +219,51 @@ python3 -m venv .venv
 source .venv/bin/activate
 ```
 
-Install the Python application:
+Upgrade pip and install Mantha Ray with its web and desktop dependencies:
 
 ```bash
 python3 -m pip install --upgrade pip
-python3 -m pip install -e .
+python3 -m pip install -e '.[web,desktop]'
 ```
 
-Build the web interface:
+Build the analysis image using the repository’s `Containerfile`:
+
+```bash
+docker build \
+  --pull \
+  --file Containerfile \
+  --tag static-triage:core \
+  .
+```
+
+The initial image build requires an internet connection and may take several minutes. It installs ClamAV, capa, FLOSS, their supporting rules, and the current ClamAV signature database.
+
+Verify the completed image:
+
+```bash
+docker run --rm \
+  --network none \
+  static-triage:core \
+  --version
+```
+
+Check the bundled ClamAV engine and database version:
+
+```bash
+docker run --rm \
+  --network none \
+  --entrypoint clamscan \
+  static-triage:core \
+  --version
+```
+
+After the image has been built, Mantha Ray runs analysis containers with networking disabled.
+
+### Frontend development
+
+This section is only necessary when changing files under `frontend/`.
+
+Install Node.js and npm using the package manager for your distribution, then run:
 
 ```bash
 cd frontend
@@ -143,58 +272,46 @@ npm run build
 cd ..
 ```
 
-Build the analysis image using the repository’s `Containerfile`:
-
-```bash
-docker build \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
-```
-
-Confirm that the image contains the progress-enabled scanner:
-
-```bash
-docker run --rm \
-  --network none \
-  static-triage:core \
-  scan --help
-```
-
-The output should include:
+The production application normally uses the compiled assets already stored under:
 
 ```text
---progress-jsonl
+src/static_triage/web_dist/
 ```
 
 ## Running Mantha Ray
 
-If the virtual environment is active:
+Activate the project’s virtual environment:
+
+```bash
+cd ~/malware-scanner
+source .venv/bin/activate
+```
+
+Launch Mantha Ray:
 
 ```bash
 mantha-ray
 ```
 
-Otherwise:
+Mantha Ray starts an authenticated loopback web service and opens the interface in the default browser.
+
+To start the service without automatically opening a browser:
 
 ```bash
-.venv/bin/mantha-ray
-```
-
-Mantha Ray starts a local authenticated web service and opens the interface in your default browser.
-
-To start it without automatically opening a browser:
-
-```bash
-.venv/bin/mantha-ray web --no-browser
+mantha-ray web --no-browser
 ```
 
 To use a specific loopback port:
 
 ```bash
-.venv/bin/mantha-ray web --port 8080
+mantha-ray web --port 8080
 ```
 
+If the `mantha-ray` command is unavailable despite installation, launch it directly from the virtual environment:
+
+```bash
+.venv/bin/mantha-ray
+```
 ## Starting a scan
 
 1. Select **New scan**.
