@@ -2,59 +2,50 @@
 
 Mantha Ray is a local static malware-triage application for inspecting suspicious folders without executing their contents.
 
-It inventories files, calculates hashes, scans for known signatures with ClamAV, identifies executable capabilities with capa, and extracts strings from eligible Windows executables with FLOSS. Analysis runs inside a hardened, network-disabled Docker container, while a local web interface presents progress, saved scans, reports, and per-file results.
+It inventories files, calculates hashes, scans for known signatures with ClamAV, identifies executable capabilities with capa, and extracts strings from eligible Windows executables with FLOSS. Analysis runs inside a hardened, network-disabled Docker container, while a local web interface presents live progress, saved scans, reports, and per-file results.
 
 > Static analysis can identify useful indicators, but it cannot prove that a file is safe.
 
 ## Features
 
-* Local browser-based interface
-* Persistent scan history
-* Live analysis-stage tracker
-* Expandable artifact and directory tree
-* Per-file analyzer coverage
-* Weighted capa risk scoring
-* ClamAV signature detection
-* FLOSS string extraction for eligible PE files
-* SHA-256 hashing and file inventory
-* Markdown and JSON reports
-* Raw analyzer output retention
-* Scan cancellation
-* Read-only source mounting
-* Network-disabled analysis
-* Resource-limited Docker execution
+- Local browser-based interface
+- Persistent scan history
+- Live analysis-stage tracker and activity console
+- Expandable artifact and directory tree
+- Per-file analyzer coverage
+- Weighted capa risk scoring
+- ClamAV signature detection
+- FLOSS string extraction for eligible PE files
+- SHA-256 hashing and file inventory
+- Markdown and JSON reports
+- Raw analyzer output retention
+- Scan cancellation
+- Read-only source mounting
+- Network-disabled analysis
+- Resource-limited Docker execution
 
 ## Analysis pipeline
 
 Mantha Ray processes a selected folder through five stages:
 
 1. **Inventory**
-
-   * Walks the directory tree
-   * Records file type, size, permissions, and routing class
-   * Calculates SHA-256 hashes
-   * Enforces file-count, size, and depth limits
-
+   - Walks the directory tree
+   - Records file type, size, permissions, and routing class
+   - Calculates SHA-256 hashes
+   - Enforces file-count, size, and depth limits
 2. **ClamAV**
-
-   * Scans files against the signatures included in the analysis image
-   * Reports known detections and scan errors
-
+   - Scans files against the signatures included in the analysis image
+   - Reports known detections and scan errors
 3. **capa**
-
-   * Analyzes supported PE and ELF binaries
-   * Identifies capabilities such as process manipulation, networking, persistence, and cryptography
-   * Assigns weighted risk based on capability type and supporting evidence
-
+   - Analyzes supported PE and ELF binaries
+   - Identifies capabilities such as process manipulation, networking, persistence, and cryptography
+   - Assigns weighted risk based on capability type and supporting evidence
 4. **FLOSS**
-
-   * Extracts static, stack, tight, and decoded strings from eligible PE files
-   * Does not run against unsupported file types such as ELF binaries
-
+   - Extracts static, stack, tight, and decoded strings from eligible PE files
+   - Does not run against unsupported file types such as ELF binaries
 5. **Report**
-
-   * Produces machine-readable and human-readable case artifacts
-   * Records incomplete stages and coverage gaps
+   - Produces machine-readable and human-readable case artifacts
+   - Records incomplete stages and coverage gaps
 
 ## Safety model
 
@@ -62,14 +53,14 @@ Mantha Ray is designed to inspect files without executing them.
 
 The analysis container is launched with:
 
-* Networking disabled
-* A read-only container filesystem
-* The selected input folder mounted read-only
-* Linux capabilities dropped
-* `no-new-privileges` enabled
-* CPU, memory, and process limits
-* A bounded temporary filesystem mounted with `noexec`
-* Results written to a separate output directory
+- Networking disabled
+- A read-only container filesystem
+- The selected input folder mounted read-only
+- Linux capabilities dropped
+- `no-new-privileges` enabled
+- CPU, memory, and process limits
+- A bounded temporary filesystem mounted with `noexec`
+- Results written to a separate output directory
 
 The source folder and results folder cannot overlap.
 
@@ -77,11 +68,11 @@ These controls reduce risk, but they do not make hostile files harmless. Docker 
 
 For higher-risk samples:
 
-* Disable the VM network adapter at the hypervisor
-* Disable shared folders, clipboard sharing, and drag-and-drop
-* Take a clean VM snapshot first
-* Do not launch samples through Wine or another runtime
-* Do not treat a clean static report as authorization to execute a file
+- Disable the VM network adapter at the hypervisor
+- Disable shared folders, clipboard sharing, and drag-and-drop
+- Take a clean VM snapshot first
+- Do not launch samples through Wine or another runtime
+- Do not treat a clean static report as authorization to execute a file
 
 ## Requirements
 
@@ -131,7 +122,6 @@ Install the required system packages:
 
 ```bash
 sudo apt update
-
 sudo apt install \
   git \
   python3 \
@@ -184,18 +174,16 @@ Log out and back in before continuing.
 
 ### Verify the prerequisites
 
-Confirm that Python and Docker are available:
+From the repository root, run:
 
 ```bash
-git --version
-python3 --version
-docker --version
-docker info
+./scripts/check-requirements.sh
 ```
 
-Test ordinary-user access to Docker:
+You can also verify Docker access directly:
 
 ```bash
+docker info
 docker run --rm hello-world
 ```
 
@@ -212,21 +200,28 @@ git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
 cd malware-scanner
 ```
 
-Create and activate a Python virtual environment:
+Check the host requirements:
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+./scripts/check-requirements.sh
 ```
 
-Upgrade pip and install Mantha Ray with its web and desktop dependencies:
+Run the setup workflow:
 
 ```bash
-python3 -m pip install --upgrade pip
-python3 -m pip install -e '.[web,desktop]'
+./scripts/setup.sh
 ```
 
-Build the analysis image using the repository’s `Containerfile`:
+The setup script creates the repository-local Python virtual environment and installs Mantha Ray with its required host-side dependencies. Normal users do not need to activate the virtual environment manually.
+
+Confirm that the installation and bundled frontend are present:
+
+```bash
+test -x .venv/bin/mantha-ray
+test -f src/static_triage/web_dist/index.html
+```
+
+Build the analysis image:
 
 ```bash
 docker build \
@@ -238,13 +233,19 @@ docker build \
 
 The initial image build requires an internet connection and may take several minutes. It installs ClamAV, capa, FLOSS, their supporting rules, and the current ClamAV signature database.
 
-Verify the completed image:
+Verify the analysis image:
 
 ```bash
 docker run --rm \
   --network none \
   static-triage:core \
-  --version
+  scan --help
+```
+
+The scanner help should include:
+
+```text
+--progress-jsonl
 ```
 
 Check the bundled ClamAV engine and database version:
@@ -263,7 +264,13 @@ After the image has been built, Mantha Ray runs analysis containers with network
 
 This section is only necessary when changing files under `frontend/`.
 
-Install Node.js and npm using the package manager for your distribution, then run:
+Install Node.js and npm using the package manager for your distribution, then let the setup workflow install and build the frontend:
+
+```bash
+./scripts/setup.sh --build-frontend
+```
+
+Alternatively, build it directly:
 
 ```bash
 cd frontend
@@ -272,7 +279,7 @@ npm run build
 cd ..
 ```
 
-The production application normally uses the compiled assets already stored under:
+The production application uses the compiled assets stored under:
 
 ```text
 src/static_triage/web_dist/
@@ -280,46 +287,32 @@ src/static_triage/web_dist/
 
 ## Running Mantha Ray
 
-Activate the project’s virtual environment:
+From the repository root, launch Mantha Ray with:
 
 ```bash
-cd ~/malware-scanner
-source .venv/bin/activate
+./mantha-ray.sh
 ```
 
-Launch Mantha Ray:
-
-```bash
-mantha-ray
-```
+The launcher automatically uses the repository's virtual environment. Manual activation is not required.
 
 Mantha Ray starts an authenticated loopback web service and opens the interface in the default browser.
 
-To start the service without automatically opening a browser:
+Advanced command-line options remain available through the virtual-environment executable. For example:
 
 ```bash
-mantha-ray web --no-browser
+.venv/bin/mantha-ray web --no-browser
+.venv/bin/mantha-ray web --port 8080
 ```
 
-To use a specific loopback port:
-
-```bash
-mantha-ray web --port 8080
-```
-
-If the `mantha-ray` command is unavailable despite installation, launch it directly from the virtual environment:
-
-```bash
-.venv/bin/mantha-ray
-```
 ## Starting a scan
 
 1. Select **New scan**.
 2. Choose the folder containing the files to inspect.
 3. Choose a separate results directory.
 4. Select **Start secure scan**.
-5. Monitor the live stage tracker.
-6. Review the artifact tree and completed report.
+5. Monitor the stage tracker and live Activity console.
+6. Pause or resume auto-scroll as needed, or copy the activity log.
+7. Review the artifact tree and completed report.
 
 The default results location is:
 
@@ -335,22 +328,22 @@ For very large applications, consider scanning suspicious installers, launchers,
 
 ### Overall case status
 
-| Status                     | Meaning                                                                                                                                 |
-| -------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Status | Meaning |
+| --- | --- |
 | **No Indicators Detected** | All configured stages completed without a signature detection or review-level static indicator. This does not prove the files are safe. |
-| **Needs Review**           | Static evidence crossed the review threshold or otherwise requires manual inspection.                                                   |
-| **High Concern**           | Stronger capability combinations or other high-risk evidence were identified.                                                           |
-| **Known Detection**        | ClamAV reported a known signature match.                                                                                                |
-| **Incomplete**             | One or more stages failed, timed out, were unavailable, or exceeded configured limits.                                                  |
+| **Needs Review** | Static evidence crossed the review threshold or otherwise requires manual inspection. |
+| **High Concern** | Stronger capability combinations or other high-risk evidence were identified. |
+| **Known Detection** | ClamAV reported a known signature match. |
+| **Incomplete** | One or more stages failed, timed out, were unavailable, or exceeded configured limits. |
 
 ### Artifact risk
 
-| Risk       | Meaning                                                                               |
-| ---------- | ------------------------------------------------------------------------------------- |
-| **Clean**  | No mapped file-level indicator was recorded.                                          |
-| **Low**    | Informational behavior was found, such as a common process-lifecycle capability.      |
-| **Medium** | The file has review flags or capa evidence that requires closer inspection.           |
-| **High**   | A known signature or high-concern capability assessment was associated with the file. |
+| Risk | Meaning |
+| --- | --- |
+| **Clean** | No mapped file-level indicator was recorded. |
+| **Low** | Informational behavior was found, such as a common process-lifecycle capability. |
+| **Medium** | The file has review flags or capa evidence that requires closer inspection. |
+| **High** | A known signature or high-concern capability assessment was associated with the file. |
 
 Directory rows inherit the highest risk of any artifact beneath them.
 
@@ -360,9 +353,9 @@ A badge indicates that an analyzer covered the file.
 
 The absence of a badge can mean the analyzer was not applicable. For example:
 
-* capa can inspect supported PE and ELF binaries.
-* FLOSS is intended for eligible PE files.
-* A text document will not normally receive capa or FLOSS coverage.
+- capa can inspect supported PE and ELF binaries.
+- FLOSS is intended for eligible PE files.
+- A text document will not normally receive capa or FLOSS coverage.
 
 Analyzer coverage does not mean the file is safe. It only describes which tools examined it.
 
@@ -377,7 +370,7 @@ terminate process
 risk 1 — informational
 ```
 
-Process termination is common in legitimate software. Mantha Ray’s weighting policy prevents low-context lifecycle behavior from independently forcing a case into review.
+Process termination is common in legitimate software. Mantha Ray's weighting policy prevents low-context lifecycle behavior from independently forcing a case into review.
 
 Capabilities become more important when they appear in suspicious combinations or alongside stronger evidence.
 
@@ -402,13 +395,13 @@ case-20260925T171612Z-9e778e07/
 
 ### Important files
 
-* `report.md` — human-readable report
-* `report.json` — structured report for automation
-* `files.jsonl` — one inventory record per artifact
-* `manifest.json` — case metadata and tool information
-* `raw/` — bounded analyzer output and per-file results
-* `logs/scanner.log` — scanner activity log
-* `web-session.json` — optional interface metadata used for persisted scan history
+- `report.md` — human-readable report
+- `report.json` — structured report for automation
+- `files.jsonl` — one inventory record per artifact
+- `manifest.json` — case metadata and tool information
+- `raw/` — bounded analyzer output and per-file results
+- `logs/scanner.log` — scanner activity log
+- `web-session.json` — optional interface metadata used for persisted scan history
 
 The report and inventory should be treated as untrusted evidence when filenames or embedded strings originate from suspicious files.
 
@@ -463,6 +456,7 @@ PYTHONPATH="$PWD/src" python3 -m unittest discover \
 ```bash
 cd frontend
 npm run build
+cd ..
 ```
 
 The frontend build runs TypeScript checking before producing the bundled web assets.
@@ -481,6 +475,10 @@ The production application normally serves the bundled files generated by `npm r
 ```text
 malware-scanner/
 ├── Containerfile
+├── mantha-ray.sh
+├── scripts/
+│   ├── check-requirements.sh
+│   └── setup.sh
 ├── frontend/
 │   ├── index.html
 │   ├── package.json
@@ -507,18 +505,64 @@ malware-scanner/
 
 ## Troubleshooting
 
-### Docker is unavailable
+### Permission denied when running a script
+
+Git normally preserves executable permissions. If the scripts cannot be executed, restore them with:
+
+```bash
+chmod +x \
+  scripts/check-requirements.sh \
+  scripts/setup.sh \
+  mantha-ray.sh
+```
+
+Then retry:
+
+```bash
+./scripts/setup.sh
+```
+
+### Docker permission denied or unavailable
 
 Confirm that Docker is running:
 
 ```bash
+sudo systemctl enable --now docker
 docker info
 ```
 
-Then verify that the current user can launch a container:
+If access is still denied, add the current account to the Docker group:
 
 ```bash
-docker run --rm hello-world
+sudo usermod -aG docker "$USER"
+```
+
+Sign out and back in before retrying.
+
+Do not repeatedly prefix Mantha Ray with `sudo`. The application and its result files should remain owned by the normal user.
+
+### Missing virtual environment
+
+Run the setup workflow:
+
+```bash
+./scripts/setup.sh
+```
+
+The `./mantha-ray.sh` launcher automatically uses the repository's virtual environment after setup completes. Manual activation is not required.
+
+### Missing web interface
+
+Confirm that the bundled frontend exists:
+
+```bash
+test -f src/static_triage/web_dist/index.html
+```
+
+If the file is missing and the frontend development requirements are installed, rebuild it with:
+
+```bash
+./scripts/setup.sh --build-frontend
 ```
 
 ### `--progress-jsonl` is not recognized
@@ -527,6 +571,7 @@ The web application is using an older analysis image. Rebuild it from the curren
 
 ```bash
 docker build \
+  --pull \
   --file Containerfile \
   --tag static-triage:core \
   .
@@ -538,8 +583,20 @@ Confirm the flag exists:
 docker run --rm \
   --network none \
   static-triage:core \
-  scan --help \
-  | grep progress-jsonl
+  scan --help | grep progress-jsonl
+```
+
+### Old ClamAV signatures
+
+Rebuild the image with updated base-image layers and without the build cache:
+
+```bash
+docker build \
+  --pull \
+  --no-cache \
+  --file Containerfile \
+  --tag static-triage:core \
+  .
 ```
 
 ### ClamAV exits with code 2
@@ -559,7 +616,6 @@ Run the test command from the repository root:
 
 ```bash
 cd malware-scanner
-
 PYTHONPATH="$PWD/src" python3 -m unittest discover \
   -s tests \
   -p 'test_*.py' \
@@ -581,10 +637,10 @@ Do not save results beneath the source folder.
 
 Large folders can require substantial time for:
 
-* File hashing
-* ClamAV scanning
-* Per-binary capa analysis
-* FLOSS extraction
+- File hashing
+- ClamAV scanning
+- Per-binary capa analysis
+- FLOSS extraction
 
 The interface limits analyzer work and reports skipped or timed-out files as coverage gaps rather than silently treating them as clean.
 
@@ -594,29 +650,28 @@ A file may contain an informational capa capability without requiring review. Lo
 
 ## Current limitations
 
-* Static analysis cannot observe runtime-only behavior.
-* Packed or encrypted executables can hide capabilities and strings.
-* ClamAV coverage depends on the age and contents of its signature database.
-* capa matches describe behavior and require context.
-* FLOSS currently targets eligible PE files.
-* Very large folders may hit file, size, output, or time limits.
-* Password-protected archives must be handled separately before their contents can be inspected.
-* No static result should be treated as proof that execution is safe.
+- Static analysis cannot observe runtime-only behavior.
+- Packed or encrypted executables can hide capabilities and strings.
+- ClamAV coverage depends on the age and contents of its signature database.
+- capa matches describe behavior and require context.
+- FLOSS currently targets eligible PE files.
+- Very large folders may hit file, size, output, or time limits.
+- Password-protected archives must be handled separately before their contents can be inspected.
+- No static result should be treated as proof that execution is safe.
 
 ## Roadmap
 
 Planned work includes:
 
-* Expanded multi-file and mixed-format test fixtures
-* File-level evidence details in the artifact tree
-* High, medium, low, and clean dashboard totals
-* Improved large-tree navigation and filtering
-* One-command local installer
-* Prebuilt release packages
-* Automatically refreshed analysis images
-* Optional YARA support
-* Future emulation and sandbox integrations
-* Final retro-inspired interface and color-system pass
+- Expanded multi-file and mixed-format test fixtures
+- File-level evidence details in the artifact tree
+- High, medium, low, and clean dashboard totals
+- Improved large-tree navigation and filtering
+- Prebuilt release packages
+- Automatically refreshed analysis images
+- Optional YARA support
+- Future emulation and sandbox integrations
+- Final retro-inspired interface and color-system pass
 
 ## Responsible use
 
