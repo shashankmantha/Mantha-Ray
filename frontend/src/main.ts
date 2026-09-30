@@ -220,6 +220,22 @@ const progressState = element<HTMLSpanElement>("progress-state");
 
 const resultsSection = element<HTMLElement>("results-section");
 
+const liveActivityPanel = element<HTMLPreElement>(
+  "live-activity-panel",
+);
+
+const activityAutoscrollButton =
+  element<HTMLButtonElement>(
+    "activity-autoscroll",
+  );
+
+const copyActivityButton =
+  element<HTMLButtonElement>(
+    "copy-activity",
+  );
+
+let activityAutoScroll = true;
+
 let artifactBlock: HTMLElement | null = null;
 
 let artifactPopoutButton: HTMLButtonElement | null = null;
@@ -861,12 +877,131 @@ function renderStageTracker(state: ScanState): void {
   }
 }
 
+
+function sanitizeActivityMessage(
+  message: string,
+): string {
+  return message.replace(
+    /[\u0000-\u001f\u007f-\u009f]/g,
+    "�",
+  );
+}
+
+function activityEventLine(
+  event: ScanEvent,
+): string {
+  const timestamp = new Date(event.time);
+
+  const displayTime = Number.isNaN(
+    timestamp.getTime(),
+  )
+    ? event.time
+    : timestamp.toLocaleTimeString();
+
+  return (
+    `[${displayTime}] `
+    + sanitizeActivityMessage(event.message)
+  );
+}
+
+function activityText(
+  events: readonly ScanEvent[],
+): string {
+  if (events.length === 0) {
+    return "[waiting] No activity received yet.";
+  }
+
+  return events
+    .map(activityEventLine)
+    .join("\n");
+}
+
+function scrollActivityToBottom(): void {
+  liveActivityPanel.scrollTop =
+    liveActivityPanel.scrollHeight;
+}
+
+function setActivityAutoScroll(
+  enabled: boolean,
+): void {
+  activityAutoScroll = enabled;
+
+  activityAutoscrollButton.textContent = enabled
+    ? "Auto-scroll: on"
+    : "Auto-scroll: paused";
+
+  activityAutoscrollButton.setAttribute(
+    "aria-pressed",
+    String(enabled),
+  );
+
+  if (enabled) {
+    scrollActivityToBottom();
+  }
+}
+
+function renderLiveActivity(
+  state: ScanState,
+): void {
+  liveActivityPanel.textContent = activityText(
+    state.events,
+  );
+
+  if (activityAutoScroll) {
+    scrollActivityToBottom();
+  }
+}
+
+async function copyLiveActivity(): Promise<void> {
+  const output = liveActivityPanel.textContent ?? "";
+
+  if (!output) {
+    return;
+  }
+
+  const originalLabel =
+    copyActivityButton.textContent ?? "Copy";
+
+  try {
+    await navigator.clipboard.writeText(output);
+
+    copyActivityButton.textContent = "Copied";
+
+    window.setTimeout(() => {
+      copyActivityButton.textContent = originalLabel;
+    }, 1500);
+  } catch {
+    showError(
+      "The activity output could not be copied.",
+    );
+  }
+}
+
+activityAutoscrollButton.addEventListener(
+  "click",
+  () => {
+    setActivityAutoScroll(!activityAutoScroll);
+  },
+);
+
+copyActivityButton.addEventListener(
+  "click",
+  () => {
+    void copyLiveActivity();
+  },
+);
+
 function renderProgress(state: ScanState): void {
   renderStageTracker(state);
+
   progressMessage.textContent = state.message;
   progressState.textContent =
     state.state.toUpperCase();
+
+  renderLiveActivity(state);
 }
+
+
 
 function finishScan(state: ScanState): void {
   updateSession(state);
@@ -995,24 +1130,40 @@ function analyzerResultMap(
 ): Map<string, JsonObject> {
   const results = data?.results;
   const mapped = new Map<string, JsonObject>();
+
   if (!Array.isArray(results)) {
     return mapped;
   }
+
   for (const value of results) {
     const result = objectValue(value);
+
     if (
-      result
-      && typeof result.relative_path === "string"
+      !result
+      || typeof result.relative_path !== "string"
     ) {
-      mapped.set(
-        result.relative_path,
-        result,
-      );
+      continue;
+    }
+
+    mapped.set(
+      result.relative_path,
+      result,
+    );
+
+    if (Array.isArray(result.reused_for)) {
+      for (const reusedPath of result.reused_for) {
+        if (typeof reusedPath === "string") {
+          mapped.set(
+            reusedPath,
+            result,
+          );
+        }
+      }
     }
   }
+
   return mapped;
 }
-
 function pathMatches(
   candidate: string,
   relativePath: string,
@@ -1697,20 +1848,20 @@ function renderArtifactNode(
         if (!detail) {
           return;
         }
-        const shouldExpand = detail.hidden !== false;
-        detail.hidden = !shouldExpand;
-        toggle.textContent = shouldExpand ? "▾" : "▸";
+        const collapsed = detail.hidden !== false;
+        detail.hidden = !collapsed;
+        toggle.textContent = collapsed ? "▾" : "▸";
         toggle.setAttribute(
           "aria-expanded",
-          String(shouldExpand),
+          String(collapsed),
         );
         toggle.setAttribute(
-          "aria-label", 
-          `${shouldExpand ? "Hide" : "Show"} details for ${node.path}`,
+          "aria-label",
+          `${collapsed ? "Hide" : "Show"} details for ${node.path}`,
         );
         row.classList.toggle(
           "artifact-row-expanded",
-          shouldExpand,
+          collapsed,
         );
       });
     }
@@ -1808,12 +1959,17 @@ function renderResult(state: ScanState): void {
   if (!result) {
     return;
   }
+
+  renderLiveActivity(state);
+
+  
   const report = result.report;
   const summary = objectValue(report.summary) ?? {};
   const clamav = analyzer(report, "clamav");
   const capa = analyzer(report, "capa");
   const floss = analyzer(report, "floss");
   element("metric-files").textContent =
+  
     numberValue(summary.regular_files);
   element("metric-hashed").textContent =
     numberValue(summary.hashed_files);
@@ -1835,11 +1991,9 @@ function renderResult(state: ScanState): void {
       ? `${incompleteReasons.length} coverage gap${incompleteReasons.length === 1 ? "" : "s"}`
       : "All configured stages completed";
   element("report-panel").textContent = result.report_markdown;
-  element("activity-panel").textContent = state.events
-    .map((event) =>
-      `${new Date(event.time).toLocaleTimeString()}  ${event.message}`,
-    )
-    .join("\n");
+  element("activity-panel").textContent = activityText(
+    state.events,
+  );
   element("json-panel").textContent = JSON.stringify(
     report,
     null,

@@ -2,20 +2,27 @@
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 import os
 
-from .capa import CapaBatchResult
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
-from .clamav import ClamAVResult, ClamAVStatus
-from .floss import FlossBatchResult
 
 from . import __version__
+from .capa import CapaBatchResult
+from .capa_risk import (
+    HIGH_CONCERN_SCORE,
+    REVIEW_SCORE,
+    RISK_POLICY_VERSION,
+)
+from .clamav import ClamAVResult, ClamAVStatus
 from .config import ScanConfig
+from .deduplication import group_entries_by_sha256
+from .floss import FlossBatchResult
 from .models import (
+    EntryKind,
     EntryState,
     InventoryEntry,
     InventorySummary,
@@ -23,12 +30,6 @@ from .models import (
     RoutingClass,
     SCHEMA_VERSION,
     ToolInfo,
-)
-
-from .capa_risk import (
-    HIGH_CONCERN_SCORE,
-    REVIEW_SCORE,
-    RISK_POLICY_VERSION,
 )
 
 
@@ -64,7 +65,7 @@ def _bounded_text(
     if len(text) <= max_chars:
         return text
 
-    return text[: max_chars - 1] + "…"
+    return text[: max_chars - 1] + "â€¦"
 
 
 def _markdown_code(value: object) -> str:
@@ -240,14 +241,35 @@ def write_case_artifacts(
     else:
         clamav_payload = clamav_result.to_dict()
 
+    capa_eligible_entries = [
+        entry
+        for entry in entries
+        if (
+            entry.kind == EntryKind.REGULAR_FILE
+            and entry.state == EntryState.INVENTORIED
+            and entry.routing_class
+            in {
+                RoutingClass.PE_EXECUTABLE,
+                RoutingClass.PE_DLL,
+                RoutingClass.ELF,
+            }
+        )
+    ]
+
     if capa_result is None:
         capa_payload: dict[str, Any] = {
             "status": "not_run",
             "complete": False,
             "eligible_files": (
-                summary.supported_binaries
+                len(capa_eligible_entries)
+            ),
+            "unique_eligible_files": len(
+                group_entries_by_sha256(
+                    capa_eligible_entries
+                )
             ),
             "attempted_files": 0,
+            "duplicate_analyses_avoided": 0,
             "skipped_due_to_limit": 0,
             "skipped_due_to_timeout": 0,
             "capability_count": 0,
@@ -270,22 +292,34 @@ def write_case_artifacts(
     else:
         capa_payload = capa_result.to_dict()
 
-    floss_eligible_files = sum(
-        entry.state == EntryState.INVENTORIED
-        and entry.routing_class
-        in {
-            RoutingClass.PE_EXECUTABLE,
-            RoutingClass.PE_DLL,
-        }
+    floss_eligible_entries = [
+        entry
         for entry in entries
-    )
+        if (
+            entry.kind == EntryKind.REGULAR_FILE
+            and entry.state == EntryState.INVENTORIED
+            and entry.routing_class
+            in {
+                RoutingClass.PE_EXECUTABLE,
+                RoutingClass.PE_DLL,
+            }
+        )
+    ]
 
     if floss_result is None:
         floss_payload: dict[str, Any] = {
             "status": "not_run",
             "complete": False,
-            "eligible_files": floss_eligible_files,
+            "eligible_files": len(
+                floss_eligible_entries
+            ),
+            "unique_eligible_files": len(
+                group_entries_by_sha256(
+                    floss_eligible_entries
+                )
+            ),
             "attempted_files": 0,
+            "duplicate_analyses_avoided": 0,
             "skipped_due_to_limit": 0,
             "skipped_due_to_timeout": 0,
             "extracted_string_count": 0,
@@ -633,7 +667,7 @@ def _render_markdown(
                 + _markdown_code(
                     finding["relative_path"]
                 )
-                + " — "
+                + " â€” "
                 + _markdown_code(
                     finding["signature"]
                 )
@@ -722,12 +756,27 @@ def _render_markdown(
             ),
             f"- Complete: `{capa['complete']}`",
             (
-                "- Eligible binaries: "
+                "- Eligible binary paths: "
                 f"`{capa['eligible_files']}`"
             ),
             (
-                "- Attempted binaries: "
+                "- Unique binaries by SHA-256: "
+                "`"
+                + str(
+                    capa.get(
+                        "unique_eligible_files",
+                        capa["eligible_files"],
+                    )
+                )
+                + "`"
+            ),
+            (
+                "- capa executions: "
                 f"`{capa['attempted_files']}`"
+            ),
+            (
+                "- Duplicate analyses avoided: "
+                f"`{capa.get('duplicate_analyses_avoided', 0)}`"
             ),
             (
                 "- Skipped by file limit: "
@@ -877,11 +926,11 @@ def _render_markdown(
                         + _markdown_code(
                             result["relative_path"]
                         )
-                        + " — "
+                        + " â€” "
                         + _markdown_code(
                             capability["name"]
                         )
-                        + f" — risk {capability_score} "
+                        + f" â€” risk {capability_score} "
                         + f"({capability_level})"
                     ),
                     (
@@ -920,6 +969,50 @@ def _render_markdown(
             "`report.json`."
         )
 
+    capa_reuse_results = [
+        result
+        for result in capa_results
+        if result.get("reused_for")
+    ]
+
+    if capa_reuse_results:
+        lines.extend(
+            [
+                "",
+                "### capa SHA-256 result reuse",
+                "",
+            ]
+        )
+
+        for result in capa_reuse_results[:100]:
+            reused_for = result.get("reused_for") or []
+            rendered_paths = ", ".join(
+                _markdown_code(path)
+                for path in reused_for[:20]
+            )
+            suffix = (
+                ""
+                if len(reused_for) <= 20
+                else (
+                    f", plus {len(reused_for) - 20} "
+                    "additional paths"
+                )
+            )
+            lines.append(
+                "- Result from "
+                + _markdown_code(result["relative_path"])
+                + " also covers "
+                + rendered_paths
+                + suffix
+                + "."
+            )
+
+        if len(capa_reuse_results) > 100:
+            lines.append(
+                "- Additional reuse mappings are available "
+                "in `report.json`."
+            )
+
     if rendered_capabilities == 0:
         lines.append("")
 
@@ -955,12 +1048,27 @@ def _render_markdown(
             ),
             f"- Complete: `{floss['complete']}`",
             (
-                "- Eligible PE files: "
+                "- Eligible PE paths: "
                 f"`{floss['eligible_files']}`"
             ),
             (
-                "- Attempted PE files: "
+                "- Unique PE files by SHA-256: "
+                "`"
+                + str(
+                    floss.get(
+                        "unique_eligible_files",
+                        floss["eligible_files"],
+                    )
+                )
+                + "`"
+            ),
+            (
+                "- FLOSS executions: "
                 f"`{floss['attempted_files']}`"
+            ),
+            (
+                "- Duplicate analyses avoided: "
+                f"`{floss.get('duplicate_analyses_avoided', 0)}`"
             ),
             (
                 "- Skipped by file limit: "
@@ -1045,11 +1153,11 @@ def _render_markdown(
                 + _markdown_code(
                     result["relative_path"]
                 )
-                + " — "
+                + " â€” "
                 + _markdown_code(
                     item["value"]
                 )
-                + " — "
+                + " â€” "
                 + _markdown_code(
                     "; ".join(details)
                 )
@@ -1091,6 +1199,50 @@ def _render_markdown(
             "the normalized result limit; inspect the "
             "bounded raw FLOSS JSON."
         )
+
+    floss_reuse_results = [
+        result
+        for result in floss_results
+        if result.get("reused_for")
+    ]
+
+    if floss_reuse_results:
+        lines.extend(
+            [
+                "",
+                "### FLOSS SHA-256 result reuse",
+                "",
+            ]
+        )
+
+        for result in floss_reuse_results[:100]:
+            reused_for = result.get("reused_for") or []
+            rendered_paths = ", ".join(
+                _markdown_code(path)
+                for path in reused_for[:20]
+            )
+            suffix = (
+                ""
+                if len(reused_for) <= 20
+                else (
+                    f", plus {len(reused_for) - 20} "
+                    "additional paths"
+                )
+            )
+            lines.append(
+                "- Result from "
+                + _markdown_code(result["relative_path"])
+                + " also covers "
+                + rendered_paths
+                + suffix
+                + "."
+            )
+
+        if len(floss_reuse_results) > 100:
+            lines.append(
+                "- Additional reuse mappings are available "
+                "in `report.json`."
+            )
 
     if rendered_strings == 0:
         lines.append("")
@@ -1174,7 +1326,7 @@ def _render_markdown(
         )
 
         lines.append(
-            f"- {safe_path} — {evidence}"
+            f"- {safe_path} â€” {evidence}"
         )
 
     if len(review_items) > 100:

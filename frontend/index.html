@@ -271,6 +271,40 @@
               </button>
             </section>
 
+            <div class="live-activity">
+            <div class="live-activity-header">
+              <div>
+                <span class="live-activity-indicator" aria-hidden="true"></span>
+                <strong>Live activity</strong>
+              </div>
+
+              <div class="live-activity-actions">
+                <button
+                  id="activity-autoscroll"
+                  class="activity-console-button"
+                  type="button"
+                  aria-pressed="true"
+                >
+                  Auto-scroll: on
+                </button>
+
+                <button
+                  id="copy-activity"
+                  class="activity-console-button"
+                  type="button"
+                >
+                  Copy
+                </button>
+              </div>
+            </div>
+
+            <pre
+              id="live-activity-panel"
+              class="live-activity-panel"
+              aria-label="Live scan activity"
+            ></pre>
+          </div>
+
             <section id="results-section" class="d-none">
               <div class="metric-grid" aria-label="Scan summary">
                 <article class="metric-cell">

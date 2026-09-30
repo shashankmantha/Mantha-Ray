@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 import json
-import os
-import time 
+import time
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .runner import CommandResult, run_command
-
+from .deduplication import (
+    AnalysisGroup,
+    group_entries_by_sha256,
+)
 from .models import (
     EntryKind,
     EntryState,
     InventoryEntry,
     RoutingClass,
 )
+from .runner import CommandResult, run_command
 
 
 class FlossStatus(str, Enum):
@@ -27,6 +29,7 @@ class FlossStatus(str, Enum):
     COMPLETED = "completed"
     ERROR = "error"
     TIMED_OUT = "timed_out"
+
 
 class FlossBatchStatus(str, Enum):
     """Normalized outcome of the complete FLOSS stage."""
@@ -70,6 +73,7 @@ class FlossResult:
     stdout: str
     stderr: str
     error: str | None = None
+    reused_for: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -96,6 +100,7 @@ class FlossResult:
                 self.duration_seconds
             ),
             "error": self.error,
+            "reused_for": list(self.reused_for),
         }
 
 
@@ -112,13 +117,23 @@ class FlossBatchResult:
     results: tuple[FlossResult, ...]
     duration_seconds: float
     error: str | None = None
+    unique_eligible_files: int | None = None
+    duplicate_analyses_avoided: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "complete": self.complete,
             "eligible_files": self.eligible_files,
+            "unique_eligible_files": (
+                self.unique_eligible_files
+                if self.unique_eligible_files is not None
+                else self.eligible_files
+            ),
             "attempted_files": self.attempted_files,
+            "duplicate_analyses_avoided": (
+                self.duplicate_analyses_avoided
+            ),
             "skipped_due_to_limit": (
                 self.skipped_due_to_limit
             ),
@@ -145,6 +160,7 @@ class FlossBatchResult:
             "error": self.error,
         }
 
+
 @dataclass(frozen=True, slots=True)
 class FlossSelection:
     """Deterministic selection of PE files for FLOSS."""
@@ -152,6 +168,9 @@ class FlossSelection:
     entries: tuple[InventoryEntry, ...]
     eligible_count: int
     skipped_due_to_limit: int
+    groups: tuple[AnalysisGroup, ...] = ()
+    unique_eligible_count: int = 0
+
 
 _STRING_CATEGORIES = (
     ("decoded", "decoded_strings"),
@@ -272,7 +291,7 @@ def parse_floss_strings(
                     raw_value[
                         : max_string_chars - 1
                     ]
-                    + "…"
+                    + "\u2026"
                 )
 
                 strings_truncated = True
@@ -486,21 +505,26 @@ def select_floss_entries(
         )
     ]
 
-    eligible.sort(
-        key=lambda entry: os.fsencode(
-            entry.relative_path
-        )
+    groups = group_entries_by_sha256(eligible)
+    selected_groups = groups[:max_files]
+    selected = tuple(
+        group.representative
+        for group in selected_groups
     )
-
-    selected = eligible[:max_files]
 
     return FlossSelection(
-        entries=tuple(selected),
+        entries=selected,
         eligible_count=len(eligible),
         skipped_due_to_limit=(
-            len(eligible) - len(selected)
+            sum(
+                len(group.entries)
+                for group in groups[max_files:]
+            )
         ),
+        groups=selected_groups,
+        unique_eligible_count=len(groups),
     )
+
 
 def run_floss_batch(
     entries: list[InventoryEntry],
@@ -549,7 +573,10 @@ def run_floss_batch(
     started = time.monotonic()
     results: list[FlossResult] = []
 
-    for entry in selection.entries:
+    analyzed_groups: list[AnalysisGroup] = []
+
+    for group in selection.groups:
+        entry = group.representative
         elapsed = time.monotonic() - started
         remaining = total_timeout_seconds - elapsed
 
@@ -596,10 +623,21 @@ def run_floss_batch(
                 ),
             )
 
-        results.append(result)
+        results.append(
+            replace(
+                result,
+                reused_for=group.reused_paths,
+            )
+        )
+        analyzed_groups.append(group)
 
     skipped_due_to_timeout = (
-        len(selection.entries) - len(results)
+        sum(
+            len(group.entries)
+            for group in selection.groups[
+                len(analyzed_groups):
+            ]
+        )
     )
 
     issues: list[str] = []
@@ -653,4 +691,11 @@ def run_floss_batch(
             time.monotonic() - started
         ),
         error="; ".join(issues) or None,
+        unique_eligible_files=(
+            selection.unique_eligible_count
+        ),
+        duplicate_analyses_avoided=sum(
+            group.duplicate_count
+            for group in analyzed_groups
+        ),
     )
