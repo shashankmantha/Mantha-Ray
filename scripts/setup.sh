@@ -154,16 +154,20 @@ docker build \
   "$PROJECT_ROOT"
 
 step "Verifying the analysis container"
-scanner_help="$(
-  docker run \
-    --rm \
-    --network none \
-    "$IMAGE_NAME" \
-    scan \
-    --help
-)"
+if ! docker run \
+  --rm \
+  --network none \
+  --entrypoint python3 \
+  "$IMAGE_NAME" \
+  -c '
+import inspect
+import static_triage.cli as cli
 
-if [[ "$scanner_help" != *"--progress-jsonl"* ]]; then
+source = inspect.getsource(cli)
+raise SystemExit(
+    0 if "--progress-jsonl" in source else 1
+)
+'; then
   printf '%s\n' \
     'The image built, but its scanner is missing --progress-jsonl.' \
     'Confirm that Containerfile copied the current source tree.' \
