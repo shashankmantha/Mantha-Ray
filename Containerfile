@@ -66,7 +66,6 @@ RUN apk add --no-cache \
         -print \
         -quit \
         | grep -q . \
-    && freshclam \
     && /opt/capa-venv/bin/capa --version \
     && /opt/floss-venv/bin/floss --version \
     && rm -f \
@@ -76,6 +75,11 @@ RUN apk add --no-cache \
         /tmp/capa-source \
         /root/.cache \
     && apk del .analysis-build-deps
+
+
+ARG CLAMAV_DB_REFRESH=unset
+RUN printf 'Refreshing ClamAV signatures (%s)\n' "${CLAMAV_DB_REFRESH}" \
+    && freshclam
 
 WORKDIR /opt/static-triage
 

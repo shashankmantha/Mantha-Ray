@@ -417,16 +417,13 @@ The interface ignores malformed, incomplete, or symbolically linked case directo
 
 The ClamAV database is included when the analysis image is built.
 
-Mantha Ray intentionally treats an excessively old signature database as an incomplete scan. If ClamAV reports that its database is older than the allowed age, rebuild the image while online:
+Mantha Ray intentionally treats a signature database older than 7 days as an incomplete scan, and ClamAV is shown as failed for every file. Refresh it by running setup again while online:
 
 ```bash
-docker build \
-  --pull \
-  --no-cache \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
+./scripts/setup.sh
 ```
+
+The signature download has its own image layer keyed to the build date, so this re-downloads signatures at most once per day and reuses the cached capa and FLOSS installation.
 
 Verify the database and engine version:
 
@@ -588,16 +585,13 @@ docker run --rm \
 
 ### Old ClamAV signatures
 
-Rebuild the image with updated base-image layers and without the build cache:
+If every file shows ClamAV as failed, the image's signatures are probably more than 7 days old. Run setup again while online; it refreshes the signatures without reinstalling the other tools:
 
 ```bash
-docker build \
-  --pull \
-  --no-cache \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
+./scripts/setup.sh
 ```
+
+If you build the image by hand, pass a new value for `CLAMAV_DB_REFRESH` (for example, `--build-arg CLAMAV_DB_REFRESH=$(date -u +%Y-%m-%d)`), or use `--no-cache` to rebuild everything.
 
 ### ClamAV exits with code 2
 

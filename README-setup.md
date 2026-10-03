@@ -214,13 +214,10 @@ installed, rebuild it with:
 
 ### Old ClamAV signatures
 
-Rebuild the image with updated base-image layers and without the build cache:
+If every file shows ClamAV as failed, the image's signatures are probably more than 7 days old. Run setup again while online; it refreshes the signatures without reinstalling the other tools:
 
 ```bash
-docker build \
-  --pull \
-  --no-cache \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
+./scripts/setup.sh
 ```
+
+If you build the image by hand, pass a new value for `CLAMAV_DB_REFRESH` (for example, `--build-arg CLAMAV_DB_REFRESH=$(date -u +%Y-%m-%d)`), or use `--no-cache` to rebuild everything.

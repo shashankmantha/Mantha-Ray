@@ -149,6 +149,7 @@ fi
 step "Building the analysis container"
 docker build \
   --pull \
+  --build-arg "CLAMAV_DB_REFRESH=$(date -u +%Y-%m-%d)" \
   --file "$PROJECT_ROOT/Containerfile" \
   --tag "$IMAGE_NAME" \
   "$PROJECT_ROOT"
@@ -175,9 +176,20 @@ raise SystemExit(
   exit 1
 fi
 
+clamav_version="$(
+  docker run \
+    --rm \
+    --network none \
+    --entrypoint clamscan \
+    "$IMAGE_NAME" \
+    --version
+)"
+
 step "Setup complete"
 printf '%s\n' \
   "Analysis image: $IMAGE_NAME" \
+  "ClamAV engine/signatures: $clamav_version" \
+  'Signatures expire after 7 days. Run this setup again to refresh them.' \
   '' \
   'Launch Mantha Ray with:' \
   '' \
