@@ -3,6 +3,21 @@ import "./styles.css";
 
 import { api } from "./api";
 import { analyzer, objectValue } from "./risk";
+import {
+  createScanController,
+  isTerminalState,
+} from "./scanController";
+import {
+  allSessions,
+  appendSession,
+  getActiveScanId,
+  getSelectedScanId,
+  getSession,
+  hasSession,
+  orderedSessionIds,
+  removeHistoricalSessions,
+  setSelectedScanId,
+} from "./sessionStore";
 import type {
   CaseHistoryResponse,
   JsonObject,
@@ -19,12 +34,6 @@ import {
 } from "./ui/artifactTree";
 import { element } from "./ui/elements";
 
-const terminalStates = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-]);
-
 const stageOrder: readonly StageName[] = [
   "inventory",
   "clamav",
@@ -40,18 +49,6 @@ const stageLabels: Record<StageName, string> = {
   floss: "FLOSS",
   report: "Report",
 };
-
-const sessions = new Map<string, ScanSession>();
-
-const sessionOrder: string[] = [];
-
-let activeScanId: string | null = null;
-
-let selectedScanId: string | null = null;
-
-let pollTimer: number | null = null;
-
-let serviceReady = false;
 
 const setupView = element<HTMLElement>("setup-view");
 
@@ -157,14 +154,14 @@ async function checkHealth(): Promise<void> {
     error?: string;
   }>("/api/health");
   if (health.ok) {
-    serviceReady = true;
+    scanController.setServiceReady(true);
     serviceBadge.textContent =
       `Docker ${health.docker_version ?? "ready"}`;
     serviceBadge.className = "status-chip status-good";
     updateControlState();
     return;
   }
-  serviceReady = false;
+  scanController.setServiceReady(false);
   serviceBadge.textContent = "Docker unavailable";
   serviceBadge.className = "status-chip status-danger";
   updateControlState();
@@ -192,12 +189,6 @@ async function selectDirectory(
       await loadHistory();
     }
   }
-}
-
-function pathLabel(path: string): string {
-  const normalized = path.replaceAll("\\\\", "/");
-  const pieces = normalized.split("/").filter(Boolean);
-  return pieces.at(-1) ?? "Scan";
 }
 
 function statusText(session: ScanSession): string {
@@ -273,13 +264,14 @@ function formatSessionTime(date: Date): string {
 
 function renderSessionList(): void {
   scanList.replaceChildren();
+  const sessionOrder = orderedSessionIds();
   scanCount.textContent = String(sessionOrder.length);
   scanListEmpty.classList.toggle(
     "d-none",
     sessionOrder.length > 0,
   );
   for (const id of sessionOrder) {
-    const session = sessions.get(id);
+    const session = getSession(id);
     if (!session) {
       continue;
     }
@@ -289,7 +281,7 @@ function renderSessionList(): void {
     button.dataset.scanId = id;
     button.setAttribute(
       "aria-selected",
-      String(selectedScanId === id),
+      String(getSelectedScanId() === id),
     );
     const dot = document.createElement("span");
     dot.className = `scan-dot scan-dot-${statusKind(session)}`;
@@ -312,15 +304,7 @@ function renderSessionList(): void {
 
 async function loadHistory(): Promise<void> {
   const resultsDirectory = resultsInput.value;
-  for (const [id, session] of sessions) {
-    if (session.historical) {
-      sessions.delete(id);
-      const index = sessionOrder.indexOf(id);
-      if (index >= 0) {
-        sessionOrder.splice(index, 1);
-      }
-    }
-  }
+  removeHistoricalSessions();
   if (!resultsDirectory) {
     renderSessionList();
     return;
@@ -335,7 +319,7 @@ async function loadHistory(): Promise<void> {
     },
   );
   const knownCaseIds = new Set(
-    Array.from(sessions.values())
+    Array.from(allSessions())
       .map((session) =>
         session.state.result?.case_id
         ?? session.caseId,
@@ -355,7 +339,7 @@ async function loadHistory(): Promise<void> {
     )
       ? new Date()
       : startedAt;
-    sessions.set(id, {
+    appendSession({
       id,
       label: entry.label,
       sourcePath: entry.source_directory ?? "",
@@ -374,23 +358,22 @@ async function loadHistory(): Promise<void> {
       resultsDirectory,
       persistedStatus: entry.status,
     });
-    sessionOrder.push(id);
   }
   renderSessionList();
 }
 
 function updateControlState(): void {
-  const scanning = activeScanId !== null;
+  const scanning = getActiveScanId() !== null;
   chooseSource.disabled = scanning;
   chooseResults.disabled = scanning;
   newScanButton.disabled = scanning;
-  startButton.disabled = scanning || !serviceReady;
+  startButton.disabled = scanning || !scanController.isServiceReady();
 }
 
 function showSetup(resetSource = false): void {
   clearError();
   setArtifactTreePoppedOut(false);
-  selectedScanId = null;
+  setSelectedScanId(null);
   setupView.classList.remove("d-none");
   scanView.classList.add("d-none");
   if (resetSource) {
@@ -401,16 +384,16 @@ function showSetup(resetSource = false): void {
 }
 
 async function selectSession(id: string): Promise<void> {
-  if (!sessions.has(id)) {
+  if (!hasSession(id)) {
     return;
   }
   clearError();
   setArtifactTreePoppedOut(false);
-  selectedScanId = id;
+  setSelectedScanId(id);
   setupView.classList.add("d-none");
   scanView.classList.remove("d-none");
   renderSessionList();
-  const session = sessions.get(id);
+  const session = getSession(id);
   if (
     session?.historical
     && !session.loaded
@@ -449,10 +432,11 @@ async function selectSession(id: string): Promise<void> {
 }
 
 function renderSelectedSession(): void {
+  const selectedScanId = getSelectedScanId();
   if (!selectedScanId) {
     return;
   }
-  const session = sessions.get(selectedScanId);
+  const session = getSession(selectedScanId);
   if (!session) {
     return;
   }
@@ -464,11 +448,11 @@ function renderSelectedSession(): void {
   verdict.textContent = statusText(session).toUpperCase();
   verdict.className =
     `verdict verdict-${statusKind(session)}`;
-  const terminal = terminalStates.has(session.state.state);
+  const terminal = isTerminalState(session.state.state);
   progressWrap.classList.toggle("d-none", terminal);
   cancelButton.classList.toggle(
     "d-none",
-    session.id !== activeScanId,
+    session.id !== getActiveScanId(),
   );
   if (!terminal) {
     resultsSection.classList.add("d-none");
@@ -484,115 +468,6 @@ function renderSelectedSession(): void {
   resultsSection.classList.add("d-none");
   openCaseButton.classList.add("d-none");
   showError(session.state.error ?? session.state.message);
-}
-
-async function startScan(): Promise<void> {
-  clearError();
-  if (!sourceInput.value || !resultsInput.value) {
-    showError(
-      "Choose both a source folder and a results folder.",
-    );
-    return;
-  }
-  try {
-    const sourcePath = sourceInput.value;
-    const state = await api<ScanState>("/api/scans", {
-      method: "POST",
-      body: JSON.stringify({
-        source_directory: sourcePath,
-        results_directory: resultsInput.value,
-      }),
-    });
-    const session: ScanSession = {
-      id: state.scan_id,
-      label: pathLabel(sourcePath),
-      sourcePath,
-      startedAt: new Date(),
-      state,
-      historical: false,
-      loaded: true,
-      caseId: null,
-      resultsDirectory: resultsInput.value,
-      persistedStatus: null,
-    };
-    sessions.set(session.id, session);
-    sessionOrder.unshift(session.id);
-    activeScanId = session.id;
-    selectedScanId = session.id;
-    updateControlState();
-    void selectSession(session.id);
-    schedulePoll(100);
-  } catch (error) {
-    showError(
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-async function cancelScan(): Promise<void> {
-  if (!activeScanId) {
-    return;
-  }
-  cancelButton.disabled = true;
-  try {
-    const state = await api<ScanState>(
-      `/api/scans/${activeScanId}`,
-      { method: "DELETE" },
-    );
-    updateSession(state);
-  } catch (error) {
-    showError(
-      error instanceof Error ? error.message : String(error),
-    );
-  } finally {
-    cancelButton.disabled = false;
-  }
-}
-
-function schedulePoll(delay: number): void {
-  if (pollTimer !== null) {
-    window.clearTimeout(pollTimer);
-  }
-  pollTimer = window.setTimeout(
-    () => void pollScan(),
-    delay,
-  );
-}
-
-async function pollScan(): Promise<void> {
-  const scanId = activeScanId;
-  if (!scanId) {
-    return;
-  }
-  try {
-    const state = await api<ScanState>(
-      `/api/scans/${scanId}`,
-    );
-    updateSession(state);
-    if (terminalStates.has(state.state)) {
-      finishScan(state);
-      return;
-    }
-    schedulePoll(750);
-  } catch (error) {
-    activeScanId = null;
-    updateControlState();
-    showError(
-      error instanceof Error ? error.message : String(error),
-    );
-  }
-}
-
-function updateSession(state: ScanState): void {
-  const session = sessions.get(state.scan_id);
-  if (!session) {
-    return;
-  }
-  session.state = state;
-  renderSessionList();
-  if (selectedScanId === state.scan_id) {
-    renderSelectedSession();
-  }
 }
 
 function stageStatusText(status: StageStatus): string {
@@ -760,16 +635,6 @@ function renderProgress(state: ScanState): void {
 
 
 
-function finishScan(state: ScanState): void {
-  updateSession(state);
-  activeScanId = null;
-  updateControlState();
-  renderSessionList();
-  if (selectedScanId === state.scan_id) {
-    renderSelectedSession();
-  }
-}
-
 function numberValue(value: unknown): string {
   return typeof value === "number"
     ? value.toLocaleString()
@@ -899,10 +764,11 @@ function renderResult(state: ScanState): void {
 }
 
 async function openCase(): Promise<void> {
+  const selectedScanId = getSelectedScanId();
   if (!selectedScanId) {
     return;
   }
-  const session = sessions.get(selectedScanId);
+  const session = getSession(selectedScanId);
   if (!session) {
     return;
   }
@@ -954,6 +820,20 @@ function configureOutputTabs(): void {
   });
 }
 
+const scanController = createScanController({
+  sourcePath: () => sourceInput.value,
+  resultsDirectory: () => resultsInput.value,
+  clearError,
+  showError,
+  updateControlState,
+  renderSessionList,
+  renderSelectedSession,
+  selectSession,
+  setCancelPending: (pending) => {
+    cancelButton.disabled = pending;
+  },
+});
+
 async function initialize(): Promise<void> {
   updateControlState();
   configureOutputTabs();
@@ -976,8 +856,14 @@ async function initialize(): Promise<void> {
       ),
     );
   });
-  startButton.addEventListener("click", () => void startScan());
-  cancelButton.addEventListener("click", () => void cancelScan());
+  startButton.addEventListener(
+    "click",
+    () => void scanController.startScan(),
+  );
+  cancelButton.addEventListener(
+    "click",
+    () => void scanController.cancelScan(),
+  );
   openCaseButton.addEventListener("click", () => void openCase());
   try {
     await establishSession();
