@@ -8,7 +8,12 @@ from typing import Any
 
 from ..host_scan import HostScanError
 from .artifacts import load_case_artifacts
-from .metadata import metadata_string, read_session_metadata
+from .metadata import (
+    metadata_events,
+    metadata_string,
+    read_session_metadata,
+)
+from .state import stages_from_report
 from .validation import (
     CASE_ID_PATTERN,
     case_created_at,
@@ -236,4 +241,69 @@ def load_case_result(
         "artifacts": load_case_artifacts(
             case_directory
         ),
+    }
+
+
+def load_saved_case(
+    results_directory: str,
+    case_id: str,
+) -> dict[str, Any]:
+    """Load one saved case as a completed scan state."""
+
+    root = resolve_history_root(
+        results_directory
+    )
+    case_directory = resolve_case_directory(
+        root,
+        case_id,
+    )
+    metadata = read_session_metadata(
+        case_directory
+    )
+    result = load_case_result(
+        case_directory,
+        case_id,
+    )
+    created_at = metadata_string(
+        metadata,
+        "created_at",
+        case_created_at(case_id),
+    )
+    updated_at = metadata_string(
+        metadata,
+        "updated_at",
+        created_at,
+    )
+    source_directory = metadata_string(
+        metadata,
+        "source_directory",
+        "",
+        max_length=4096,
+    )
+    events = metadata_events(metadata)
+
+    if not events:
+        events = [
+            {
+                "time": updated_at,
+                "message": (
+                    "Loaded saved scan results."
+                ),
+            }
+        ]
+
+    return {
+        "scan_id": case_id,
+        "source_directory": source_directory,
+        "results_directory": str(root),
+        "state": "completed",
+        "message": "Loaded saved scan results.",
+        "created_at": created_at,
+        "updated_at": updated_at,
+        "events": events,
+        "stages": stages_from_report(
+            result["report"]
+        ),
+        "result": result,
+        "error": None,
     }
