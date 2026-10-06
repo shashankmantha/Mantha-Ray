@@ -37,11 +37,11 @@ class HostScanTests(unittest.TestCase):
 
             with (
                 patch(
-                    "static_triage.host_scan.os.getuid",
+                    "static_triage.container.command.os.getuid",
                     return_value=10,
                 ),
                 patch(
-                    "static_triage.host_scan.os.getgid",
+                    "static_triage.container.command.os.getgid",
                     return_value=20,
                 ),
             ):
