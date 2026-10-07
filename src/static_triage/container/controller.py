@@ -16,6 +16,11 @@ from .command import (
     build_docker_command,
     validate_request,
 )
+from ..resource_profiles import (
+    ResourceProfile,
+    ResourceProfileError,
+    check_capacity,
+)
 from .progress import parse_progress_event
 from .result import DockerScanResult, parse_scan_output
 
@@ -142,6 +147,75 @@ class DockerScanController:
             or "available"
         )
 
+    def docker_capacity(
+        self,
+    ) -> tuple[float, int] | None:
+        """Return Docker's CPU count and memory, or None if unknown.
+
+        Docker Desktop runs containers in a virtual machine that can be
+        smaller than the host, so capacity comes from Docker itself.
+        """
+
+        engine_path = self._resolve_engine()
+
+        try:
+            info = subprocess.run(
+                [
+                    engine_path,
+                    "info",
+                    "--format",
+                    "{{.NCPU}} {{.MemTotal}}",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=15,
+            )
+        except (
+            OSError,
+            subprocess.TimeoutExpired,
+        ):
+            return None
+
+        if info.returncode != 0:
+            return None
+
+        parts = info.stdout.split()
+        if len(parts) != 2:
+            return None
+        try:
+            cpus = float(int(parts[0]))
+            memory = int(parts[1])
+        except ValueError:
+            return None
+        if cpus <= 0 or memory <= 0:
+            return None
+        return cpus, memory
+
+    def check_resources(
+        self,
+        profile: ResourceProfile,
+    ) -> list[str]:
+        """Reject profiles Docker cannot satisfy; return warnings."""
+
+        capacity = self.docker_capacity()
+        if capacity is None:
+            return [
+                "Docker did not report its CPU and memory capacity, "
+                "so the resource profile could not be checked "
+                "against it."
+            ]
+
+        cpus, memory = capacity
+        try:
+            return check_capacity(
+                profile,
+                cpus_available=cpus,
+                memory_bytes_available=memory,
+            )
+        except ResourceProfileError as exc:
+            raise HostScanError(str(exc)) from exc
+
     def scan(
         self,
         request: DockerScanRequest,
@@ -157,6 +231,10 @@ class DockerScanController:
 
         validated = validate_request(
             request
+        )
+
+        warnings = self.check_resources(
+            validated.resource_profile
         )
 
         engine_path = (
@@ -190,6 +268,8 @@ class DockerScanController:
             )
 
         if on_status is not None:
+            for warning in warnings:
+                on_status(warning)
             on_status(
                 "Starting the isolated "
                 "analysis container..."

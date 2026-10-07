@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+
+from ..resource_profiles import ResourceProfile, resolve_profile
 
 
 IMAGE_PATTERN = re.compile(
@@ -28,7 +30,15 @@ class DockerScanRequest:
     source_directory: Path
     results_directory: Path
     image: str = "static-triage:core"
-    timeout_seconds: int = 4 * 60 * 60
+    resource_profile: ResourceProfile = field(
+        default_factory=resolve_profile,
+    )
+
+    @property
+    def timeout_seconds(self) -> int:
+        """Host wall-clock limit, taken from the resource profile."""
+
+        return self.resource_profile.host_timeout_seconds
 
 
 def _paths_overlap(
@@ -118,17 +128,28 @@ def validate_request(
             "The configured container image name is invalid."
         )
 
-    if request.timeout_seconds <= 0:
+    if not isinstance(
+        request.resource_profile,
+        ResourceProfile,
+    ):
         raise HostScanError(
-            "The scan timeout must be greater than zero."
+            "The scan has no valid resource profile."
         )
 
     return DockerScanRequest(
         source_directory=source,
         results_directory=results,
         image=request.image,
-        timeout_seconds=request.timeout_seconds,
+        resource_profile=request.resource_profile,
     )
+
+
+def _docker_size(mib: int) -> str:
+    """Format MiB for Docker, using whole GiB where exact."""
+
+    if mib % 1024 == 0:
+        return f"{mib // 1024}g"
+    return f"{mib}m"
 
 
 def build_docker_command(
@@ -143,6 +164,8 @@ def build_docker_command(
         f"{request.source_directory},"
         "target=/staging/input,readonly"
     )
+
+    profile = request.resource_profile
 
     results_mount = (
         "type=bind,source="
@@ -166,17 +189,17 @@ def build_docker_command(
         "--security-opt",
         "label=disable",
         "--pids-limit",
-        "256",
+        str(profile.pids_limit),
         "--memory",
-        "4g",
+        _docker_size(profile.memory_mib),
         "--cpus",
-        "2",
+        f"{profile.cpus:g}",
         "--user",
         f"{os.getuid()}:{os.getgid()}",
         "--tmpfs",
         (
             "/tmp:rw,noexec,nosuid,nodev,"
-            "size=512m,mode=1777"
+            f"size={profile.tmp_mib}m,mode=1777"
         ),
         "--mount",
         source_mount,
