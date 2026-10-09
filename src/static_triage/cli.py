@@ -1,4 +1,4 @@
-"""Command-line interface for Mantha Ray."""
+
 
 from __future__ import annotations
 
@@ -8,8 +8,14 @@ import sys
 from pathlib import Path
 
 from . import __version__
-from .config import ScanConfig, ScanLimits
+from .config import ScanConfig
 from .errors import TriageError
+from .resource_profiles import (
+    ResourceProfile,
+    ResourceProfileError,
+    profile_from_dict,
+    resolve_profile,
+)
 from .scanner import run_inventory_scan
 
 
@@ -65,25 +71,39 @@ def build_parser(
     scan.add_argument(
         "--max-files",
         type=int,
-        default=25_000,
+        default=None,
+        help="overrides the resource profile (default 25000)",
     )
 
     scan.add_argument(
         "--max-total-gib",
         type=int,
-        default=100,
+        default=None,
+        help="overrides the resource profile (default 100)",
     )
 
     scan.add_argument(
         "--max-file-gib",
         type=int,
-        default=4,
+        default=None,
+        help="overrides the resource profile (default 4)",
     )
 
     scan.add_argument(
         "--max-depth",
         type=int,
-        default=32,
+        default=None,
+        help="overrides the resource profile (default 32)",
+    )
+
+    scan.add_argument(
+        "--resource-profile",
+        metavar="JSON",
+        default=None,
+        help=(
+            "resource profile from the host, as JSON; "
+            "validated before use (default: balanced)"
+        ),
     )
 
     # Internal host/container protocol switch. Normal CLI callers still
@@ -181,6 +201,57 @@ def _print_error(
     return 2
 
 
+MAX_RESOURCE_PROFILE_CHARS = 16_384
+
+_INVENTORY_FLAGS = {
+    "max_files": "max_file_count",
+    "max_total_gib": "max_total_gib",
+    "max_file_gib": "max_file_gib",
+    "max_depth": "max_depth",
+}
+
+
+def resolve_scan_profile(
+    args: argparse.Namespace,
+) -> ResourceProfile:
+    """Resolve the profile for an in-container scan.
+
+    The host's profile is revalidated rather than trusted. Explicit
+    inventory flags override it, which makes the profile custom.
+    """
+
+    raw = args.resource_profile
+    if raw is None:
+        profile = resolve_profile()
+    else:
+        if len(raw) > MAX_RESOURCE_PROFILE_CHARS:
+            raise ResourceProfileError([(
+                None,
+                "The resource profile is too large.",
+            )])
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError as exc:
+            raise ResourceProfileError([(
+                None,
+                "The resource profile is not valid JSON.",
+            )]) from exc
+        profile = profile_from_dict(data)
+
+    explicit = {
+        field: getattr(args, flag)
+        for flag, field in _INVENTORY_FLAGS.items()
+        if getattr(args, flag) is not None
+    }
+    if not explicit:
+        return profile
+
+    return resolve_profile(
+        profile.base,
+        {**profile.changed_fields(), **explicit},
+    )
+
+
 def _print_progress(
     stage: str,
     status: str,
@@ -267,16 +338,14 @@ def main(
     if args.command != "scan":
         return 2
 
-    limits = ScanLimits(
-        max_file_count=args.max_files,
-        max_total_bytes=(
-            args.max_total_gib * 1024**3
-        ),
-        max_file_bytes=(
-            args.max_file_gib * 1024**3
-        ),
-        max_depth=args.max_depth,
-    )
+    try:
+        profile = resolve_scan_profile(args)
+    except ResourceProfileError as exc:
+        return _print_error(
+            f"Invalid resource profile: {exc}"
+        )
+
+    limits = profile.scan_limits()
 
     config = ScanConfig(
         staging_root=args.staging_root,

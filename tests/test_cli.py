@@ -8,6 +8,7 @@ from contextlib import redirect_stdout
 from static_triage.cli import (
     _print_progress,
     build_parser,
+    resolve_scan_profile,
 )
 
 
@@ -42,7 +43,11 @@ class CliTests(unittest.TestCase):
             args.staging_subdirectory,
             "sample",
         )
-        self.assertEqual(args.max_files, 25_000)
+        self.assertIsNone(args.resource_profile)
+        self.assertEqual(
+            resolve_scan_profile(args).max_file_count,
+            25_000,
+        )
         self.assertFalse(args.progress_jsonl)
 
     def test_scan_accepts_internal_progress_protocol(

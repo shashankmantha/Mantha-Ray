@@ -86,7 +86,12 @@ class HostScanTests(unittest.TestCase):
             )
 
             self.assertEqual(
-                command[-7:],
+                command[-2],
+                "--resource-profile",
+            )
+
+            self.assertEqual(
+                command[-9:-2],
                 [
                     "scan",
                     "input",

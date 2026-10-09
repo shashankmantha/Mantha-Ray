@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import re
 from dataclasses import dataclass, field
@@ -213,4 +214,10 @@ def build_docker_command(
         "--results-root",
         "/results",
         "--progress-jsonl",
+        "--resource-profile",
+        json.dumps(
+            profile.to_dict(),
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
     ]

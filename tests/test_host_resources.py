@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import io
+import json
 import subprocess
 import tempfile
 import unittest
@@ -41,8 +43,8 @@ def _flag(command: list[str], name: str) -> str:
 
 class DockerCommandProfileTests(unittest.TestCase):
     def test_default_request_reproduces_pre_profile_command(self) -> None:
-        # The exact command used before resource profiles existed.
-        # Balanced must never drift from it.
+        # The command used before resource profiles existed, plus the
+        # profile handed to the container. Balanced must never drift.
         with tempfile.TemporaryDirectory() as temporary:
             base = Path(temporary).resolve()
             command = _command(_request(base))
@@ -65,6 +67,12 @@ class DockerCommandProfileTests(unittest.TestCase):
                 "--staging-root", "/staging",
                 "--results-root", "/results",
                 "--progress-jsonl",
+                "--resource-profile",
+                json.dumps(
+                    resolve_profile("balanced").to_dict(),
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
             ],
         )
 
@@ -214,3 +222,51 @@ class CapacityCheckTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class StaleImageTests(unittest.TestCase):
+    def test_old_image_gets_rebuild_message(self) -> None:
+        import tempfile as _tempfile
+
+        class FakeProcess:
+            returncode = 2
+            pid = 1
+
+            def __init__(self, *args, **kwargs):
+                self.stdout = io.StringIO("")
+                self.stderr = io.StringIO(
+                    "usage: static-triage scan ...\n"
+                    "static-triage: error: unrecognized arguments: "
+                    "--resource-profile {...}\n"
+                )
+
+            def wait(self, timeout=None):
+                return 2
+
+            def poll(self):
+                return 2
+
+        controller = DockerScanController(engine="docker")
+        with _tempfile.TemporaryDirectory() as temporary:
+            base = Path(temporary)
+            (base / "s").mkdir()
+            (base / "r").mkdir()
+            with (
+                patch.object(
+                    DockerScanController,
+                    "_resolve_engine",
+                    return_value="/usr/bin/docker",
+                ),
+                patch.object(
+                    DockerScanController,
+                    "check_resources",
+                    return_value=[],
+                ),
+                patch(
+                    "static_triage.container.controller.subprocess.Popen",
+                    FakeProcess,
+                ),
+            ):
+                with self.assertRaisesRegex(HostScanError, "setup.sh"):
+                    controller.scan(
+                        DockerScanRequest(base / "s", base / "r")
+                    )

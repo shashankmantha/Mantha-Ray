@@ -443,6 +443,17 @@ class DockerScanController:
                 "than the host limit."
             )
 
+        if (
+            process.returncode == 2
+            and "--resource-profile" in stderr
+            and "unrecognized arguments" in stderr
+        ):
+            raise HostScanError(
+                "The analysis image is older than this version "
+                "of Mantha Ray. Run ./scripts/setup.sh to "
+                "rebuild it."
+            )
+
         if process.returncode != 0:
             detail = (
                 stderr.strip()
