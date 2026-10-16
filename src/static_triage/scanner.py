@@ -1,4 +1,4 @@
-"""Top-level orchestration for the static triage workflow."""
+
 
 from __future__ import annotations
 
@@ -20,6 +20,11 @@ from .inventory import inventory_tree
 from .models import ToolInfo
 from .preflight import inspect_tools
 from .reporting import write_case_artifacts
+from .scan_record import (
+    StageTimer,
+    read_container_limits,
+    resources_record,
+)
 
 
 ScanStage = Literal[
@@ -125,6 +130,9 @@ def run_inventory_scan(
     )
 
     case_directory = results_root / case_id
+
+    stage_timer = StageTimer()
+    on_progress = stage_timer.wrap(on_progress)
 
     _emit_progress(
         on_progress,
@@ -394,6 +402,15 @@ def run_inventory_scan(
         warnings=warnings,
         capa_result=capa_result,
         floss_result=floss_result,
+        resources=(
+            resources_record(
+                config.resource_profile,
+                read_container_limits(),
+            )
+            if config.resource_profile is not None
+            else None
+        ),
+        stage_timings=stage_timer.to_dict(),
     )
 
     _emit_progress(

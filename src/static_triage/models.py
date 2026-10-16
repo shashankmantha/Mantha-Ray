@@ -1,6 +1,3 @@
-
-    
-  
 """Stable data models for scanner inventory and reporting."""
 
 from __future__ import annotations
@@ -10,7 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 
-SCHEMA_VERSION = "0.2.0"
+SCHEMA_VERSION = "0.2.1"
 
 
 class RoutingClass(StrEnum):
@@ -107,4 +104,3 @@ class InventorySummary:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
-

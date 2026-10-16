@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import argparse
@@ -351,6 +349,10 @@ def main(
         staging_root=args.staging_root,
         results_root=args.results_root,
         limits=limits,
+        resource_profile={
+            **profile.to_dict(),
+            "changed": profile.changed_fields(),
+        },
     )
 
     progress_callback = (

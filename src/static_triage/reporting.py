@@ -1,4 +1,3 @@
-"""Deterministic JSON, JSONL, Markdown, and log reporting."""
 
 from __future__ import annotations
 
@@ -155,6 +154,8 @@ def write_case_artifacts(
     warnings: list[str],
     capa_result: CapaBatchResult | None = None,
     floss_result: FlossBatchResult | None = None,
+    resources: dict[str, Any] | None = None,
+    stage_timings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Write the complete inventory-milestone artifact set."""
 
@@ -352,6 +353,7 @@ def write_case_artifacts(
         "completed_at": completed_at,
         "target": target_relative,
         "limits": asdict(config.limits),
+        "resources": resources,
         "tools": [
             tool.to_dict()
             for tool in tools
@@ -379,6 +381,8 @@ def write_case_artifacts(
             "that files are safe."
         ),
         "summary": summary.to_dict(),
+        "resources": resources,
+        "stage_timings": stage_timings or {},
         "warnings": warnings,
         "incomplete_reasons": incomplete_reasons,
         "review_items": [
@@ -580,6 +584,99 @@ def write_case_artifacts(
             )
 
     return report
+
+
+def _format_seconds(value: object) -> str:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return "—"
+    minutes, seconds = divmod(int(round(value)), 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours} h {minutes} min" if minutes else f"{hours} h"
+    if minutes:
+        return f"{minutes} min {seconds} s" if seconds else f"{minutes} min"
+    return f"{seconds} s"
+
+
+def _render_resources(
+    report: dict[str, Any],
+) -> list[str]:
+    """Render the resource profile and stage timings."""
+
+    lines: list[str] = []
+    resources = report.get("resources")
+
+    if isinstance(resources, dict):
+        name = str(resources.get("profile", "unknown"))
+        base = str(resources.get("base", ""))
+        title = (
+            f"Custom (based on {base.title()})"
+            if name == "custom"
+            else name.title()
+        )
+        values = resources.get("values", {})
+        lines.extend(
+            [
+                "",
+                "## Resources",
+                "",
+                f"- Profile: **{title}**",
+                (
+                    f"- Container: {values.get('cpus')} CPUs, "
+                    f"{values.get('memory_mib')} MiB memory"
+                ),
+                (
+                    "- capa budget: "
+                    + _format_seconds(
+                        values.get("capa_total_timeout_seconds")
+                    )
+                    + "; FLOSS budget: "
+                    + _format_seconds(
+                        values.get("floss_total_timeout_seconds")
+                    )
+                ),
+            ]
+        )
+        changed = resources.get("changed") or {}
+        if changed:
+            lines.append(
+                "- Changed from base: "
+                + ", ".join(f"`{key}`" for key in sorted(changed))
+            )
+        if not resources.get("enforced", False):
+            missing = resources.get("not_enforced") or []
+            lines.append(
+                "- Not confirmed by the container: "
+                + (
+                    ", ".join(f"`{item}`" for item in missing)
+                    or "unknown"
+                )
+            )
+
+    timings = report.get("stage_timings")
+    if isinstance(timings, dict) and timings:
+        lines.extend(
+            [
+                "",
+                "## Stage timings",
+                "",
+                "| Stage | Status | Duration |",
+                "| --- | --- | ---: |",
+            ]
+        )
+        for stage, record in timings.items():
+            # The report stage is still running when this is written.
+            if (
+                not isinstance(record, dict)
+                or record.get("status") == "running"
+            ):
+                continue
+            lines.append(
+                f"| {stage} | {record.get('status', '—')} | "
+                f"{_format_seconds(record.get('duration_seconds'))} |"
+            )
+
+    return lines
 
 
 def _render_markdown(
@@ -1339,6 +1436,8 @@ def _render_markdown(
             "items are available in "
             "`report.json`."
         )
+
+    lines.extend(_render_resources(report))
 
     lines.extend(
         [

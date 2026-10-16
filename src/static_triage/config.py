@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +52,9 @@ class ScanConfig:
     limits: ScanLimits = field(
         default_factory=ScanLimits
     )
+    # The resolved resource profile, recorded in the report. It does
+    # not change behavior; ``limits`` is what the scanner enforces.
+    resource_profile: dict[str, Any] | None = None
 
     def validate(self) -> None:
         """Validate the complete scanner configuration."""
