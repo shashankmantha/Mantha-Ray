@@ -17,6 +17,11 @@ from .capa_risk import (
     assess_capability,
     summarize_risk,
 )
+from .scheduling import (
+    SCHEDULING_POLICY,
+    in_path_order,
+    prioritize_groups,
+)
 from .deduplication import (
     AnalysisGroup,
     group_entries_by_sha256,
@@ -92,6 +97,8 @@ class CapaResult:
     stderr: str
     error: str | None = None
     reused_for: tuple[str, ...] = ()
+    # 1-based position in which this file was analyzed.
+    analysis_position: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -110,6 +117,7 @@ class CapaResult:
             "duration_seconds": self.duration_seconds,
             "error": self.error,
             "reused_for": list(self.reused_for),
+            "analysis_position": self.analysis_position,
         }
 
     @property
@@ -137,10 +145,12 @@ class CapaBatchResult:
     error: str | None = None
     unique_eligible_files: int | None = None
     duplicate_analyses_avoided: int = 0
+    scheduling_policy: str = SCHEDULING_POLICY
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
+            "scheduling_policy": self.scheduling_policy,
             "complete": self.complete,
             "eligible_files": self.eligible_files,
             "unique_eligible_files": (
@@ -528,7 +538,9 @@ def select_capa_entries(
         )
     ]
 
-    groups = group_entries_by_sha256(eligible)
+    groups = prioritize_groups(
+        group_entries_by_sha256(eligible)
+    )
     selected_groups = groups[:max_files]
     selected = tuple(
         group.representative
@@ -634,6 +646,7 @@ def run_capa_batch(
             replace(
                 result,
                 reused_for=group.reused_paths,
+                analysis_position=len(results) + 1,
             )
         )
         analyzed_groups.append(group)
@@ -693,7 +706,7 @@ def run_capa_batch(
         skipped_due_to_timeout=(
             skipped_due_to_timeout
         ),
-        results=tuple(results),
+        results=in_path_order(results),
         duration_seconds=(
             time.monotonic() - started
         ),

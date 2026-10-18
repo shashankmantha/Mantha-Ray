@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import hashlib
@@ -896,6 +895,11 @@ def _render_markdown(
         ]
     )
 
+    if capa.get("scheduling_policy") == "smallest-first":
+        lines.append(
+            "- Analysis order: smallest files first"
+        )
+
     if capa.get("error"):
         lines.append(
             "- Error: "
@@ -1189,6 +1193,11 @@ def _render_markdown(
             ),
         ]
     )
+
+    if floss.get("scheduling_policy") == "smallest-first":
+        lines.append(
+            "- Analysis order: smallest files first"
+        )
 
     if floss.get("error"):
         lines.append(
