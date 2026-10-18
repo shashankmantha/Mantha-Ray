@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import math
@@ -439,3 +438,41 @@ def check_capacity(
             "available to Docker, which may slow the rest of the system."
         )
     return warnings
+
+# Bound the size of an overrides object accepted from a client.
+MAX_OVERRIDE_KEYS = 64
+
+
+def catalog() -> dict[str, Any]:
+    """Describe presets and editable fields for clients such as the UI.
+
+    Values are in canonical units (CPUs, MiB, seconds, GiB). The server
+    revalidates everything a client sends back.
+    """
+
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "default": DEFAULT_PRESET,
+        "presets": {name: dict(values) for name, values in PRESETS.items()},
+        "fields": {
+            name: {
+                "label": spec.label,
+                "kind": spec.kind,
+                "minimum": spec.minimum,
+                "maximum": spec.maximum,
+            }
+            for name, spec in FIELDS.items()
+        },
+        "host_timeout_margin_seconds": HOST_TIMEOUT_MARGIN_SECONDS,
+    }
+
+
+def profile_summary(profile: ResourceProfile) -> dict[str, Any]:
+    """Compact, JSON-safe description of a resolved profile."""
+
+    return {
+        "name": profile.name,
+        "base": profile.base,
+        "values": profile.values(),
+        "changed": profile.changed_fields(),
+    }

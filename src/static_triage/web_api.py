@@ -5,7 +5,7 @@
 import asyncio
 import hmac
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import (
     Cookie,
@@ -43,7 +43,19 @@ class DirectoryDialogRequest(BaseModel):
     )
 
 
-class ScanStartRequest(BaseModel):
+class ResourceSelection(BaseModel):
+    # Values stay as raw JSON (Any) so the server's own strict checks
+    # see them unmodified; Pydantic would otherwise coerce "2" or true
+    # into numbers before they could be rejected.
+    resource_profile: str | None = Field(
+        default=None,
+        max_length=32,
+    )
+
+    resource_overrides: dict[str, Any] | None = None
+
+
+class ScanStartRequest(ResourceSelection):
     source_directory: str = Field(
         min_length=1,
         max_length=4096,
@@ -254,14 +266,33 @@ def create_app(
             None,
             Depends(require_session),
         ],
-    ) -> dict[str, str]:
+    ) -> dict[str, object]:
+        resource_options = await asyncio.to_thread(
+            service.resource_options
+        )
+
         return {
             "application_name": "Mantha Ray",
             "default_results_directory": str(
                 Path.home()
                 / "mantha-ray-results"
             ),
+            "resource_profiles": resource_options,
         }
+
+    @app.post("/api/resource-profiles/validate")
+    async def validate_resource_profile(
+        payload: ResourceSelection,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(
+            service.validate_resources,
+            payload.resource_profile,
+            payload.resource_overrides,
+        )
 
     @app.post("/api/dialogs/directory")
     async def directory_dialog(
@@ -301,6 +332,8 @@ def create_app(
                 service.start,
                 payload.source_directory,
                 payload.results_directory,
+                payload.resource_profile,
+                payload.resource_overrides,
             )
 
         except HostScanError as exc:

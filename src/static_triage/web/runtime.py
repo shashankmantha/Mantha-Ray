@@ -17,6 +17,7 @@ from ..host_scan import (
     HostScanError,
     ScanCancelled,
 )
+from ..resource_profiles import profile_summary
 from .artifacts import load_case_artifacts
 from .metadata import persist_session_metadata
 from .state import (
@@ -69,6 +70,9 @@ class ScanRuntime:
                 ),
                 results_directory=str(
                     request.results_directory
+                ),
+                resource_profile=profile_summary(
+                    request.resource_profile
                 ),
             )
 

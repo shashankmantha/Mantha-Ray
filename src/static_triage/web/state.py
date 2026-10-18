@@ -112,6 +112,9 @@ class WebScanState:
     )
     result: dict[str, Any] | None = None
     error: str | None = None
+    # Summary of the resolved resource profile for live display. The
+    # saved report's "resources" block is authoritative afterwards.
+    resource_profile: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)

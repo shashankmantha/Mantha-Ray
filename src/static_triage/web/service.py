@@ -6,6 +6,7 @@ to the history module and live scans to ScanRuntime.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,16 @@ from ..host_scan import (
     DockerScanRequest,
     HostScanError,
     validate_request,
+)
+from ..resource_profiles import (
+    DEFAULT_PRESET,
+    MAX_OVERRIDE_KEYS,
+    ResourceProfile,
+    ResourceProfileError,
+    catalog,
+    check_capacity,
+    profile_summary,
+    resolve_profile,
 )
 from .history import list_cases, load_saved_case
 from .runtime import ScanRuntime
@@ -34,12 +45,143 @@ class ScanService:
         self.controller = controller
         self._runtime = ScanRuntime(controller)
 
+    def resolve_resources(
+        self,
+        resource_profile: str | None = None,
+        resource_overrides: Mapping[str, object] | None = None,
+    ) -> ResourceProfile:
+        """Resolve a client's preset choice and overrides, strictly."""
+
+        if (
+            resource_overrides is not None
+            and len(resource_overrides) > MAX_OVERRIDE_KEYS
+        ):
+            raise HostScanError(
+                "Too many resource settings were supplied."
+            )
+
+        try:
+            return resolve_profile(
+                resource_profile or DEFAULT_PRESET,
+                resource_overrides,
+            )
+        except ResourceProfileError as exc:
+            raise HostScanError(
+                f"Invalid resource settings: {exc}"
+            ) from exc
+
+    def docker_capacity(self) -> tuple[float, int] | None:
+        """Return Docker's CPUs and memory, or None if unknown."""
+
+        probe = getattr(self.controller, "docker_capacity", None)
+        if probe is None:
+            return None
+        try:
+            return probe()
+        except HostScanError:
+            return None
+
+    def resource_options(self) -> dict[str, Any]:
+        """Presets, editable fields, and Docker's capacity for the UI."""
+
+        capacity = self.docker_capacity()
+        return {
+            "catalog": catalog(),
+            "capacity": (
+                None
+                if capacity is None
+                else {
+                    "cpus": capacity[0],
+                    "memory_bytes": capacity[1],
+                }
+            ),
+        }
+
+    def validate_resources(
+        self,
+        resource_profile: str | None = None,
+        resource_overrides: Mapping[str, object] | None = None,
+    ) -> dict[str, Any]:
+        """Check a selection without starting a scan.
+
+        Problems are tied to fields so the UI can show each one next to
+        its input. Capacity is checked against Docker, not the host.
+        """
+
+        if (
+            resource_overrides is not None
+            and len(resource_overrides) > MAX_OVERRIDE_KEYS
+        ):
+            return {
+                "ok": False,
+                "profile": None,
+                "problems": [{
+                    "field": None,
+                    "message": "Too many resource settings were supplied.",
+                }],
+                "warnings": [],
+            }
+
+        try:
+            profile = resolve_profile(
+                resource_profile or DEFAULT_PRESET,
+                resource_overrides,
+            )
+        except ResourceProfileError as exc:
+            return {
+                "ok": False,
+                "profile": None,
+                "problems": [
+                    {"field": field, "message": message}
+                    for field, message in exc.problems
+                ],
+                "warnings": [],
+            }
+
+        capacity = self.docker_capacity()
+        if capacity is None:
+            warnings = [
+                "Docker did not report its capacity, so these limits "
+                "could not be checked against it."
+            ]
+        else:
+            try:
+                warnings = check_capacity(
+                    profile,
+                    cpus_available=capacity[0],
+                    memory_bytes_available=capacity[1],
+                )
+            except ResourceProfileError as exc:
+                return {
+                    "ok": False,
+                    "profile": profile_summary(profile),
+                    "problems": [
+                        {"field": field, "message": message}
+                        for field, message in exc.problems
+                    ],
+                    "warnings": [],
+                }
+
+        return {
+            "ok": True,
+            "profile": profile_summary(profile),
+            "problems": [],
+            "warnings": warnings,
+        }
+
     def prepare_request(
         self,
         source_directory: str,
         results_directory: str,
+        resource_profile: str | None = None,
+        resource_overrides: Mapping[str, object] | None = None,
     ) -> DockerScanRequest:
         """Validate paths before creating the results directory."""
+
+        profile = self.resolve_resources(
+            resource_profile,
+            resource_overrides,
+        )
 
         try:
             source = Path(
@@ -81,6 +223,7 @@ class ScanService:
                 source_directory=source,
                 results_directory=results,
                 image=self.controller.image,
+                resource_profile=profile,
             )
         )
 
@@ -123,12 +266,16 @@ class ScanService:
         self,
         source_directory: str,
         results_directory: str,
+        resource_profile: str | None = None,
+        resource_overrides: Mapping[str, object] | None = None,
     ) -> dict[str, Any]:
         """Validate the request, then start a background scan."""
 
         request = self.prepare_request(
             source_directory,
             results_directory,
+            resource_profile,
+            resource_overrides,
         )
         return self._runtime.start(request)
 

@@ -1,5 +1,3 @@
-
-
 export type JsonObject = Record<string, unknown>;
 
 export type StageName =
@@ -101,6 +99,7 @@ export interface ScanState {
   stages?: Partial<Record<StageName, StageStatus>>;
   result: ScanResult | null;
   error: string | null;
+  resource_profile?: ResourceProfileSummary | null;
 }
 
 export interface CaseHistoryEntry {
@@ -127,4 +126,55 @@ export interface ScanSession {
   caseId: string | null;
   resultsDirectory: string;
   persistedStatus: string | null;
+}
+
+export type ResourceValues = Record<string, number>;
+
+export interface ResourceFieldSpec {
+  label: string;
+  kind: "int" | "cpus";
+  minimum: number;
+  maximum: number;
+}
+
+export interface ResourceCatalog {
+  schema_version: number;
+  default: string;
+  presets: Record<string, ResourceValues>;
+  fields: Record<string, ResourceFieldSpec>;
+  host_timeout_margin_seconds: number;
+}
+
+export interface DockerCapacity {
+  cpus: number;
+  memory_bytes: number;
+}
+
+export interface ResourceOptions {
+  catalog: ResourceCatalog;
+  capacity: DockerCapacity | null;
+}
+
+export interface ResourceProfileSummary {
+  name: string;
+  base: string;
+  values: ResourceValues;
+  changed: ResourceValues;
+}
+
+export interface ResourceSelection {
+  resource_profile?: string;
+  resource_overrides?: ResourceValues | null;
+}
+
+export interface ResourceProblem {
+  field: string | null;
+  message: string;
+}
+
+export interface ResourceValidation {
+  ok: boolean;
+  profile: ResourceProfileSummary | null;
+  problems: ResourceProblem[];
+  warnings: string[];
 }

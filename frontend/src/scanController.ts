@@ -1,5 +1,3 @@
-
-
 import { api } from "./api";
 import {
   getActiveScanId,
@@ -9,7 +7,11 @@ import {
   setActiveScanId,
   setSelectedScanId,
 } from "./sessionStore";
-import type { ScanSession, ScanState } from "./types";
+import type {
+  ResourceSelection,
+  ScanSession,
+  ScanState,
+} from "./types";
 
 const terminalStates = new Set([
   "completed",
@@ -34,6 +36,8 @@ export interface ScanControllerUi {
   selectSession(id: string): Promise<void>;
   /** Disable the cancel button while a cancel request is in flight. */
   setCancelPending(pending: boolean): void;
+  /** Resource settings for the scan, or null if they are invalid. */
+  resourceSelection(): ResourceSelection | null;
 }
 
 export interface ScanController {
@@ -64,11 +68,19 @@ export function createScanController(
       );
       return;
     }
+    const resources = ui.resourceSelection();
+    if (resources === null) {
+      ui.showError(
+        "Fix the resource settings before starting the scan.",
+      );
+      return;
+    }
     try {
       const sourcePath = ui.sourcePath();
       const state = await api<ScanState>("/api/scans", {
         method: "POST",
         body: JSON.stringify({
+          ...resources,
           source_directory: sourcePath,
           results_directory: ui.resultsDirectory(),
         }),

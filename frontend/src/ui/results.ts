@@ -1,5 +1,4 @@
-// Scan view for the selected session: header, completed-result
-// metrics, analyzer stage table, coverage label, and output panels.
+
 
 import { isTerminalState } from "../scanController";
 import { analyzer, objectValue } from "../risk";
@@ -22,6 +21,7 @@ import {
   renderLiveActivity,
   renderProgress,
 } from "./progress";
+import { describeResources } from "./resources";
 import { showError, statusKind, statusText } from "./shell";
 
 export function renderSelectedSession(): void {
@@ -37,6 +37,12 @@ export function renderSelectedSession(): void {
   const result = session.state.result;
   element("case-id").textContent = result?.case_id
     ?? session.state.scan_id;
+  const resources = describeResources(
+    result?.report?.resources ?? session.state.resource_profile,
+  );
+  const resourceLine = element("scan-resources");
+  resourceLine.textContent = resources ?? "";
+  resourceLine.classList.toggle("d-none", resources === null);
   const verdict = element("verdict-badge");
   verdict.textContent = statusText(session).toUpperCase();
   verdict.className =

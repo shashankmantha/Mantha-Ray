@@ -15,7 +15,12 @@ import {
   sourceInput,
   startButton,
 } from "./ui/elements";
+import type { ResourceOptions } from "./types";
 import { configureLiveActivity } from "./ui/progress";
+import {
+  configureResourcePanel,
+  getResourceSelection,
+} from "./ui/resources";
 import {
   configureOutputTabs,
   renderSelectedSession,
@@ -42,6 +47,7 @@ const scanController = createScanController({
   setCancelPending: (pending) => {
     cancelButton.disabled = pending;
   },
+  resourceSelection: getResourceSelection,
 });
 
 async function establishSession(): Promise<void> {
@@ -71,8 +77,12 @@ async function establishSession(): Promise<void> {
 async function loadConfiguration(): Promise<void> {
   const config = await api<{
     default_results_directory: string;
+    resource_profiles?: ResourceOptions;
   }>("/api/config");
   resultsInput.value = config.default_results_directory;
+  if (config.resource_profiles) {
+    configureResourcePanel(config.resource_profiles);
+  }
 }
 
 async function checkHealth(): Promise<void> {

@@ -119,6 +119,31 @@
                   </button>
                 </div>
               </div>
+
+              <div
+                id="resource-profile-panel"
+                class="resource-panel d-none"
+              >
+                <div class="resource-heading">
+                  <span id="resource-profile-label" class="form-label">
+                    Resources
+                  </span>
+                  <span id="resource-capacity" class="resource-capacity"></span>
+                </div>
+                <div
+                  id="resource-presets"
+                  class="resource-presets"
+                  role="radiogroup"
+                  aria-labelledby="resource-profile-label"
+                ></div>
+                <p id="resource-summary" class="resource-summary"></p>
+                <div id="resource-custom" class="resource-custom d-none"></div>
+                <ul
+                  id="resource-messages"
+                  class="resource-messages"
+                  aria-live="polite"
+                ></ul>
+              </div>
             </div>
 
             <div class="scan-actions">
@@ -142,6 +167,7 @@
                 <p class="section-label">Scan session</p>
                 <h1 id="scan-title">Scan</h1>
                 <p id="case-id" class="case-id"></p>
+                <p id="scan-resources" class="scan-resources d-none"></p>
               </div>
 
               <div class="scan-header-actions">
