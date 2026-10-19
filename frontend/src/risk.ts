@@ -277,6 +277,14 @@ export function artifactDisplayRecords(
   const floss = analyzer(report, "floss");
   const capaResults = analyzerResultMap(capa);
   const flossResults = analyzerResultMap(floss);
+  // Files over FLOSS's size limit are not applicable, not a gap.
+  const flossOversized = new Set(
+    Array.isArray(floss?.skipped_size_paths)
+      ? floss.skipped_size_paths.filter(
+        (path): path is string => typeof path === "string",
+      )
+      : [],
+  );
   return artifacts.map((artifact) => {
     const relativePath = artifact.relative_path;
     const capaResult =
@@ -302,7 +310,7 @@ export function artifactDisplayRecords(
       || ["pe", "dotnet"].includes(
         routingClass,
       )
-    );
+    ) && !flossOversized.has(relativePath);
     let clamavCoverage: CoverageStatus;
     if (!regularFile) {
       clamavCoverage = "not-applicable";

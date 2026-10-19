@@ -1,4 +1,4 @@
-"""Stable data models for scanner inventory and reporting."""
+
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Any
 
 
-SCHEMA_VERSION = "0.2.2"
+SCHEMA_VERSION = "0.2.3"
 
 
 class RoutingClass(StrEnum):

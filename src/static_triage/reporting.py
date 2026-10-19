@@ -1194,6 +1194,21 @@ def _render_markdown(
         ]
     )
 
+    size_skipped = floss.get("skipped_size_paths") or []
+    if isinstance(size_skipped, list) and size_skipped:
+        lines.append(
+            "- Not applicable (over FLOSS's 16 MiB "
+            f"limit): `{len(size_skipped)}`"
+        )
+        for path in size_skipped[:10]:
+            lines.append(
+                "  - " + _markdown_code(str(path))
+            )
+        if len(size_skipped) > 10:
+            lines.append(
+                f"  - and {len(size_skipped) - 10} more"
+            )
+
     if floss.get("scheduling_policy") == "smallest-first":
         lines.append(
             "- Analysis order: smallest files first"

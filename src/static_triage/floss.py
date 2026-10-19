@@ -1,8 +1,9 @@
-"""FLOSS adapter for bounded string deobfuscation."""
+
 
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from dataclasses import dataclass, replace
@@ -26,6 +27,14 @@ from .models import (
     RoutingClass,
 )
 from .runner import CommandResult, run_command
+
+
+# FLOSS refuses to deobfuscate strings from files larger than this
+# (floss.const.MAX_FILE_SIZE in FLOSS 3.x). Such files are reported as
+# not applicable for FLOSS instead of failing after launch.
+FLOSS_MAX_FILE_BYTES = 16 * 1024 * 1024
+
+_FLOSS_SIZE_REFUSAL = "cannot deobfuscate strings from files larger than"
 
 
 class FlossStatus(str, Enum):
@@ -128,11 +137,19 @@ class FlossBatchResult:
     unique_eligible_files: int | None = None
     duplicate_analyses_avoided: int = 0
     scheduling_policy: str = SCHEDULING_POLICY
+    skipped_size_paths: tuple[str, ...] = ()
+
+    @property
+    def skipped_due_to_size(self) -> int:
+        return len(self.skipped_size_paths)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "scheduling_policy": self.scheduling_policy,
+            "size_limit_bytes": FLOSS_MAX_FILE_BYTES,
+            "skipped_due_to_size": self.skipped_due_to_size,
+            "skipped_size_paths": list(self.skipped_size_paths),
             "complete": self.complete,
             "eligible_files": self.eligible_files,
             "unique_eligible_files": (
@@ -180,6 +197,16 @@ class FlossSelection:
     skipped_due_to_limit: int
     groups: tuple[AnalysisGroup, ...] = ()
     unique_eligible_count: int = 0
+    oversized_paths: tuple[str, ...] = ()
+
+
+def _exceeds_floss_limit(entry: InventoryEntry) -> bool:
+    size = entry.size_bytes
+    return (
+        isinstance(size, int)
+        and not isinstance(size, bool)
+        and size > FLOSS_MAX_FILE_BYTES
+    )
 
 
 _STRING_CATEGORIES = (
@@ -342,6 +369,16 @@ def _normalize_result(
         status = FlossStatus.TIMED_OUT
         issues.append(
             "FLOSS exceeded its timeout"
+        )
+
+    elif (
+        execution.return_code != 0
+        and _FLOSS_SIZE_REFUSAL in execution.stderr
+    ):
+        status = FlossStatus.ERROR
+        issues.append(
+            "FLOSS refused the file because it exceeds "
+            "its 16 MiB deobfuscation limit"
         )
 
     elif execution.return_code != 0:
@@ -515,8 +552,22 @@ def select_floss_entries(
         )
     ]
 
+    oversized = sorted(
+        (
+            entry.relative_path
+            for entry in eligible
+            if _exceeds_floss_limit(entry)
+        ),
+        key=os.fsencode,
+    )
+    runnable = [
+        entry
+        for entry in eligible
+        if not _exceeds_floss_limit(entry)
+    ]
+
     groups = prioritize_groups(
-        group_entries_by_sha256(eligible)
+        group_entries_by_sha256(runnable)
     )
     selected_groups = groups[:max_files]
     selected = tuple(
@@ -525,6 +576,7 @@ def select_floss_entries(
     )
 
     return FlossSelection(
+        oversized_paths=tuple(oversized),
         entries=selected,
         eligible_count=len(eligible),
         skipped_due_to_limit=(
@@ -711,4 +763,5 @@ def run_floss_batch(
             group.duplicate_count
             for group in analyzed_groups
         ),
+        skipped_size_paths=selection.oversized_paths,
     )
