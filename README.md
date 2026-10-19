@@ -437,9 +437,19 @@ docker run --rm \
 
 ## Development
 
-### Run the Python tests
+### Run all the tests
 
 From the repository root:
+
+```bash
+./scripts/tests.sh
+```
+
+This runs the Python tests, checks every shell script's syntax and
+type-checks the frontend, then prints a pass/fail summary. Use
+`--python-only` to run just the Python tests and `-v` for verbose output.
+
+To run the Python tests by hand:
 
 ```bash
 PYTHONPATH="$PWD/src" python3 -m unittest discover \
