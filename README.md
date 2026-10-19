@@ -442,7 +442,7 @@ docker run --rm \
 From the repository root:
 
 ```bash
-./scripts/tests.sh
+./scripts/test.sh
 ```
 
 This runs the Python tests, checks every shell script's syntax and
