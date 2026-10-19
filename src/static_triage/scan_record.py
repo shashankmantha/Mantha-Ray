@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import os
@@ -58,6 +56,9 @@ class StageTimer:
 
     def observe(self, stage: str, status: str) -> None:
         if status == "running":
+            # Per-file progress repeats "running"; keep the first start.
+            if stage in self._started:
+                return
             self._started[stage] = self._clock()
             self._stages[stage] = {
                 "status": "running",

@@ -17,6 +17,11 @@ from .capa_risk import (
     assess_capability,
     summarize_risk,
 )
+from .file_progress import (
+    FileProgress,
+    finished_message,
+    started_message,
+)
 from .scheduling import (
     SCHEDULING_POLICY,
     in_path_order,
@@ -570,6 +575,7 @@ def run_capa_batch(
     file_timeout_seconds: float = 300.0,
     total_timeout_seconds: float = 3600.0,
     max_output_bytes: int = 16_000_000,
+    on_file: FileProgress | None = None,
 ) -> CapaBatchResult:
     """Run capa over a bounded set of eligible binaries."""
 
@@ -598,6 +604,8 @@ def run_capa_batch(
 
     analyzed_groups: list[AnalysisGroup] = []
 
+    total_groups = len(selection.groups)
+
     for group in selection.groups:
         entry = group.representative
         elapsed = time.monotonic() - started
@@ -615,6 +623,18 @@ def run_capa_batch(
             scan_root
             / Path(entry.relative_path)
         )
+
+        position = len(results) + 1
+
+        if on_file is not None:
+            on_file(
+                started_message(
+                    "capa",
+                    position,
+                    total_groups,
+                    group,
+                )
+            )
 
         try:
             result = run_capa(
@@ -646,10 +666,23 @@ def run_capa_batch(
             replace(
                 result,
                 reused_for=group.reused_paths,
-                analysis_position=len(results) + 1,
+                analysis_position=position,
             )
         )
         analyzed_groups.append(group)
+
+        if on_file is not None:
+            on_file(
+                finished_message(
+                    "capa",
+                    position,
+                    total_groups,
+                    group,
+                    complete=result.complete,
+                    timed_out=result.timed_out,
+                    duration_seconds=result.duration_seconds,
+                )
+            )
 
     skipped_due_to_timeout = (
         sum(

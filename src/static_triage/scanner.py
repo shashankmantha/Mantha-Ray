@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -265,6 +263,14 @@ def run_inventory_scan(
                     config.limits
                     .capa_max_output_bytes
                 ),
+                on_file=(
+                    lambda message: _emit_progress(
+                        on_progress,
+                        "capa",
+                        "running",
+                        message,
+                    )
+                ),
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -344,6 +350,14 @@ def run_inventory_scan(
                 max_string_chars=(
                     config.limits
                     .floss_max_string_chars
+                ),
+                on_file=(
+                    lambda message: _emit_progress(
+                        on_progress,
+                        "floss",
+                        "running",
+                        message,
+                    )
                 ),
             )
         except (OSError, ValueError) as exc:

@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 import json
@@ -11,6 +9,11 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from .file_progress import (
+    FileProgress,
+    finished_message,
+    started_message,
+)
 from .scheduling import (
     SCHEDULING_POLICY,
     in_path_order,
@@ -601,6 +604,7 @@ def run_floss_batch(
     max_output_bytes: int = 16_000_000,
     max_strings: int = 2_000,
     max_string_chars: int = 4_096,
+    on_file: FileProgress | None = None,
 ) -> FlossBatchResult:
     """Run FLOSS over a bounded set of eligible PE files."""
 
@@ -639,6 +643,8 @@ def run_floss_batch(
 
     analyzed_groups: list[AnalysisGroup] = []
 
+    total_groups = len(selection.groups)
+
     for group in selection.groups:
         entry = group.representative
         elapsed = time.monotonic() - started
@@ -656,6 +662,18 @@ def run_floss_batch(
             scan_root
             / Path(entry.relative_path)
         )
+
+        position = len(results) + 1
+
+        if on_file is not None:
+            on_file(
+                started_message(
+                    "FLOSS",
+                    position,
+                    total_groups,
+                    group,
+                )
+            )
 
         try:
             result = run_floss(
@@ -691,10 +709,23 @@ def run_floss_batch(
             replace(
                 result,
                 reused_for=group.reused_paths,
-                analysis_position=len(results) + 1,
+                analysis_position=position,
             )
         )
         analyzed_groups.append(group)
+
+        if on_file is not None:
+            on_file(
+                finished_message(
+                    "FLOSS",
+                    position,
+                    total_groups,
+                    group,
+                    complete=result.complete,
+                    timed_out=result.timed_out,
+                    duration_seconds=result.duration_seconds,
+                )
+            )
 
     skipped_due_to_timeout = (
         sum(

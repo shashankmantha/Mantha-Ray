@@ -43,6 +43,17 @@ class StageTimerTests(unittest.TestCase):
         self.assertIsNotNone(record["started_at"])
         self.assertIsNotNone(record["completed_at"])
 
+    def test_repeated_running_keeps_first_start(self) -> None:
+        self.timer.observe("capa", "running")
+        started = self.timer.to_dict()["capa"]["started_at"]
+        self.clock.now += 100
+        self.timer.observe("capa", "running")
+        self.clock.now += 50
+        self.timer.observe("capa", "incomplete")
+        record = self.timer.to_dict()["capa"]
+        self.assertEqual(record["duration_seconds"], 150)
+        self.assertEqual(record["started_at"], started)
+
     def test_unavailable_without_running_has_no_duration(self) -> None:
         self.timer.observe("floss", "unavailable")
         record = self.timer.to_dict()["floss"]
