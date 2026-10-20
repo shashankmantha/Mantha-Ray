@@ -352,6 +352,7 @@ def main(
         resource_profile={
             **profile.to_dict(),
             "changed": profile.changed_fields(),
+            "effective_workers": profile.effective_workers,
         },
     )
 

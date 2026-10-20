@@ -75,6 +75,9 @@ def profile_line(report: dict[str, Any]) -> str:
         parts.append(f"{cpus:g} CPUs")
     if memory is not None:
         parts.append(f"{memory / 1024:g} GiB")
+    workers = _number(resources.get("workers"))
+    if workers is not None:
+        parts.append(f"{workers:g} parallel")
     enforced = resources.get("enforced")
     if enforced is True:
         parts.append("limits confirmed")
@@ -144,10 +147,16 @@ def analyzer_lines(name: str, data: object) -> list[str]:
             "timed out" if result.get("timed_out") else "failed"
         )
         seconds = _number(result.get("duration_seconds")) or 0.0
+        limit = _number(result.get("timeout_seconds"))
+        note = (
+            f"  (limit {format_duration(limit)})"
+            if limit is not None and status != "completed"
+            else ""
+        )
         lines.append(
             f"  {position if position is not None else '-':>4}  "
             f"{status:<9}  {format_duration(seconds):>12}  "
-            f"{clean(result.get('relative_path', '?'))}"
+            f"{clean(result.get('relative_path', '?'))}{note}"
         )
     if len(ordered) > MAX_ORDER_LINES:
         lines.append(f"  … and {len(ordered) - MAX_ORDER_LINES} more")

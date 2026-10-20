@@ -597,6 +597,25 @@ def _format_seconds(value: object) -> str:
     return f"{seconds} s"
 
 
+def _analysis_plan_lines(analyzer: dict[str, Any]) -> list[str]:
+    lines: list[str] = []
+    workers = analyzer.get("workers")
+    if isinstance(workers, int) and not isinstance(workers, bool) and workers > 1:
+        lines.append(f"- Parallel analyses: {workers}")
+    policy = analyzer.get("file_timeout_policy")
+    if isinstance(policy, dict):
+        base = policy.get("base_seconds")
+        cap = policy.get("max_seconds")
+        if isinstance(cap, (int, float)) and isinstance(base, (int, float)) and cap > base:
+            lines.append(
+                f"- Per-file timeout: {_format_seconds(base)} up to 1 MiB, "
+                f"scaling with size up to {_format_seconds(cap)}"
+            )
+        else:
+            lines.append(f"- Per-file timeout: {_format_seconds(base)}")
+    return lines
+
+
 def _render_resources(
     report: dict[str, Any],
 ) -> list[str]:
@@ -636,6 +655,9 @@ def _render_resources(
                 ),
             ]
         )
+        workers = resources.get("workers")
+        if isinstance(workers, int) and not isinstance(workers, bool):
+            lines.append(f"- Parallel analyses: {workers}")
         changed = resources.get("changed") or {}
         if changed:
             lines.append(
@@ -899,6 +921,8 @@ def _render_markdown(
         lines.append(
             "- Analysis order: smallest files first"
         )
+
+    lines.extend(_analysis_plan_lines(capa))
 
     if capa.get("error"):
         lines.append(
@@ -1213,6 +1237,8 @@ def _render_markdown(
         lines.append(
             "- Analysis order: smallest files first"
         )
+
+    lines.extend(_analysis_plan_lines(floss))
 
     if floss.get("error"):
         lines.append(

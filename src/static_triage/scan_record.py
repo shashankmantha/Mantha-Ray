@@ -195,6 +195,7 @@ def resources_record(
         "base": profile["base"],
         "values": values,
         "changed": profile["changed"],
+        "workers": profile.get("effective_workers"),
         "observed": observed,
         "enforced": not mismatches,
         "not_enforced": mismatches,

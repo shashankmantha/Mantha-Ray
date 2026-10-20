@@ -17,11 +17,8 @@ from .capa_risk import (
     assess_capability,
     summarize_risk,
 )
-from .file_progress import (
-    FileProgress,
-    finished_message,
-    started_message,
-)
+from .file_progress import FileProgress
+from .parallel import run_groups, scaled_timeout, timeout_policy
 from .scheduling import (
     SCHEDULING_POLICY,
     in_path_order,
@@ -104,6 +101,8 @@ class CapaResult:
     reused_for: tuple[str, ...] = ()
     # 1-based position in which this file was analyzed.
     analysis_position: int | None = None
+    # The time limit this file was given, after size scaling and budget.
+    timeout_seconds: float | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -123,6 +122,7 @@ class CapaResult:
             "error": self.error,
             "reused_for": list(self.reused_for),
             "analysis_position": self.analysis_position,
+            "timeout_seconds": self.timeout_seconds,
         }
 
     @property
@@ -151,11 +151,15 @@ class CapaBatchResult:
     unique_eligible_files: int | None = None
     duplicate_analyses_avoided: int = 0
     scheduling_policy: str = SCHEDULING_POLICY
+    workers: int = 1
+    file_timeout_policy: dict[str, float] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "status": self.status.value,
             "scheduling_policy": self.scheduling_policy,
+            "workers": self.workers,
+            "file_timeout_policy": self.file_timeout_policy,
             "complete": self.complete,
             "eligible_files": self.eligible_files,
             "unique_eligible_files": (
@@ -576,6 +580,8 @@ def run_capa_batch(
     total_timeout_seconds: float = 3600.0,
     max_output_bytes: int = 16_000_000,
     on_file: FileProgress | None = None,
+    workers: int = 1,
+    file_timeout_max_seconds: float | None = None,
 ) -> CapaBatchResult:
     """Run capa over a bounded set of eligible binaries."""
 
@@ -594,58 +600,35 @@ def run_capa_batch(
             "capa output limit must be positive"
         )
 
+    if workers < 1:
+        raise ValueError(
+            "capa needs at least one worker"
+        )
+
     selection = select_capa_entries(
         entries,
         max_files=max_files,
     )
 
     started = time.monotonic()
-    results: list[CapaResult] = []
+    max_timeout = (
+        file_timeout_seconds
+        if file_timeout_max_seconds is None
+        else max(file_timeout_seconds, file_timeout_max_seconds)
+    )
 
-    analyzed_groups: list[AnalysisGroup] = []
-
-    total_groups = len(selection.groups)
-
-    for group in selection.groups:
+    def analyze(group: AnalysisGroup, timeout: float) -> CapaResult:
         entry = group.representative
-        elapsed = time.monotonic() - started
-        remaining = total_timeout_seconds - elapsed
-
-        if remaining <= 0:
-            break
-
-        effective_timeout = min(
-            file_timeout_seconds,
-            remaining,
-        )
-
-        file_target = (
-            scan_root
-            / Path(entry.relative_path)
-        )
-
-        position = len(results) + 1
-
-        if on_file is not None:
-            on_file(
-                started_message(
-                    "capa",
-                    position,
-                    total_groups,
-                    group,
-                )
-            )
-
         try:
-            result = run_capa(
-                file_target,
+            return run_capa(
+                scan_root / Path(entry.relative_path),
                 scan_root,
                 executable=executable,
-                timeout_seconds=effective_timeout,
+                timeout_seconds=timeout,
                 max_output_bytes=max_output_bytes,
             )
         except (OSError, ValueError) as exc:
-            result = CapaResult(
+            return CapaResult(
                 status=CapaStatus.ERROR,
                 complete=False,
                 relative_path=entry.relative_path,
@@ -662,35 +645,41 @@ def run_capa_batch(
                 ),
             )
 
-        results.append(
-            replace(
-                result,
-                reused_for=group.reused_paths,
-                analysis_position=position,
-            )
-        )
-        analyzed_groups.append(group)
+    run = run_groups(
+        selection.groups,
+        analyze,
+        label="capa",
+        workers=workers,
+        total_timeout_seconds=total_timeout_seconds,
+        timeout_for=lambda group: scaled_timeout(
+            group.representative.size_bytes,
+            base_seconds=file_timeout_seconds,
+            max_seconds=max_timeout,
+        ),
+        outcome=lambda result: (
+            result.complete,
+            result.timed_out,
+            result.duration_seconds,
+        ),
+        # Looked up at call time so tests can substitute the clock.
+        clock=lambda: time.monotonic(),
+        started_at=started,
+        on_file=on_file,
+    )
 
-        if on_file is not None:
-            on_file(
-                finished_message(
-                    "capa",
-                    position,
-                    total_groups,
-                    group,
-                    complete=result.complete,
-                    timed_out=result.timed_out,
-                    duration_seconds=result.duration_seconds,
-                )
-            )
-
-    skipped_due_to_timeout = (
-        sum(
-            len(group.entries)
-            for group in selection.groups[
-                len(analyzed_groups):
-            ]
+    results = [
+        replace(
+            item.result,
+            reused_for=item.group.reused_paths,
+            analysis_position=item.position,
+            timeout_seconds=item.timeout_seconds,
         )
+        for item in run.finished
+    ]
+    analyzed_groups = [item.group for item in run.finished]
+
+    skipped_due_to_timeout = sum(
+        len(group.entries) for group in run.not_started
     )
 
     issues: list[str] = []
@@ -750,5 +739,10 @@ def run_capa_batch(
         duplicate_analyses_avoided=sum(
             group.duplicate_count
             for group in analyzed_groups
+        ),
+        workers=workers,
+        file_timeout_policy=timeout_policy(
+            file_timeout_seconds,
+            max_timeout,
         ),
     )

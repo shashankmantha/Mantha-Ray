@@ -252,7 +252,9 @@ class SerializationTests(unittest.TestCase):
         good = resolve_profile("balanced").to_dict()
         cases = {
             "not a dict": [],
-            "wrong version": {**good, "schema_version": 2},
+            "wrong version": {**good, "schema_version": 99},
+            # Version 1 profiles lack the parallel-analysis fields.
+            "old version": {**good, "schema_version": 1},
             "extra key": {**good, "privileged": True},
             "missing key": {
                 key: value for key, value in good.items() if key != "base"

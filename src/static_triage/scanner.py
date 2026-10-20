@@ -255,6 +255,11 @@ def run_inventory_scan(
                     config.limits
                     .capa_file_timeout_seconds
                 ),
+                file_timeout_max_seconds=(
+                    config.limits
+                    .capa_file_timeout_max_seconds
+                ),
+                workers=config.limits.analysis_workers,
                 total_timeout_seconds=(
                     config.limits
                     .capa_total_timeout_seconds
@@ -336,6 +341,11 @@ def run_inventory_scan(
                     config.limits
                     .floss_file_timeout_seconds
                 ),
+                file_timeout_max_seconds=(
+                    config.limits
+                    .floss_file_timeout_max_seconds
+                ),
+                workers=config.limits.analysis_workers,
                 total_timeout_seconds=(
                     config.limits
                     .floss_total_timeout_seconds

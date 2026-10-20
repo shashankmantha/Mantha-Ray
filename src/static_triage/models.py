@@ -1,5 +1,3 @@
-
-
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -7,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 
-SCHEMA_VERSION = "0.2.3"
+SCHEMA_VERSION = "0.2.4"
 
 
 class RoutingClass(StrEnum):

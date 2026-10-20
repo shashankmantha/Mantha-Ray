@@ -7,7 +7,7 @@ from typing import Any
 
 from .config import ScanLimits
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 CUSTOM = "custom"
 
@@ -17,6 +17,9 @@ HOST_TIMEOUT_MARGIN_SECONDS = 30 * 60
 
 # Warn when a profile requests more than this share of Docker's memory.
 MEMORY_WARNING_FRACTION = 0.75
+
+# Each parallel analysis can need about this much memory on large files.
+WORKER_MEMORY_MIB = 1024
 
 _GIB = 1024**3
 _MIB = 1024**2
@@ -40,10 +43,17 @@ FIELDS: dict[str, _FieldSpec] = {
     "host_timeout_seconds": _FieldSpec(
         "int", 600, 172_800, "Host time limit (seconds)"
     ),
+    # How many files capa or FLOSS analyze at the same time.
+    "analysis_workers": _FieldSpec(
+        "int", 1, 32, "Parallel analyses (maximum)"
+    ),
     # capa budgets, enforced inside the container.
     "max_capa_files": _FieldSpec("int", 1, 10_000, "capa file cap"),
     "capa_file_timeout_seconds": _FieldSpec(
         "int", 10, 7_200, "capa per-file timeout (seconds)"
+    ),
+    "capa_file_timeout_max_seconds": _FieldSpec(
+        "int", 10, 86_400, "capa large-file timeout cap (seconds)"
     ),
     "capa_total_timeout_seconds": _FieldSpec(
         "int", 60, 86_400, "capa total budget (seconds)"
@@ -52,6 +62,9 @@ FIELDS: dict[str, _FieldSpec] = {
     "max_floss_files": _FieldSpec("int", 1, 10_000, "FLOSS file cap"),
     "floss_file_timeout_seconds": _FieldSpec(
         "int", 10, 7_200, "FLOSS per-file timeout (seconds)"
+    ),
+    "floss_file_timeout_max_seconds": _FieldSpec(
+        "int", 10, 86_400, "FLOSS large-file timeout cap (seconds)"
     ),
     "floss_total_timeout_seconds": _FieldSpec(
         "int", 60, 86_400, "FLOSS total budget (seconds)"
@@ -77,26 +90,33 @@ PRESETS: dict[str, dict[str, Any]] = {
         "pids_limit": 128,
         "tmp_mib": 256,
         "host_timeout_seconds": 2 * 60 * 60,
+        "analysis_workers": 1,
         "max_capa_files": 250,
         "capa_file_timeout_seconds": 300,
+        "capa_file_timeout_max_seconds": 15 * 60,
         "capa_total_timeout_seconds": 30 * 60,
         "max_floss_files": 25,
         "floss_file_timeout_seconds": 600,
+        "floss_file_timeout_max_seconds": 15 * 60,
         "floss_total_timeout_seconds": 30 * 60,
         **_INVENTORY_DEFAULTS,
     },
-    # Balanced reproduces the values used before profiles existed.
+    # Balanced keeps the original container size and budgets, and runs
+    # two analyses at once on its two CPUs.
     "balanced": {
         "cpus": 2,
         "memory_mib": 4096,
         "pids_limit": 256,
         "tmp_mib": 512,
         "host_timeout_seconds": 4 * 60 * 60,
+        "analysis_workers": 2,
         "max_capa_files": 250,
         "capa_file_timeout_seconds": 300,
+        "capa_file_timeout_max_seconds": 30 * 60,
         "capa_total_timeout_seconds": 60 * 60,
         "max_floss_files": 50,
         "floss_file_timeout_seconds": 600,
+        "floss_file_timeout_max_seconds": 30 * 60,
         "floss_total_timeout_seconds": 60 * 60,
         **_INVENTORY_DEFAULTS,
     },
@@ -106,11 +126,14 @@ PRESETS: dict[str, dict[str, Any]] = {
         "pids_limit": 512,
         "tmp_mib": 1024,
         "host_timeout_seconds": 6 * 60 * 60,
+        "analysis_workers": 4,
         "max_capa_files": 250,
         "capa_file_timeout_seconds": 300,
+        "capa_file_timeout_max_seconds": 60 * 60,
         "capa_total_timeout_seconds": 2 * 60 * 60,
         "max_floss_files": 100,
         "floss_file_timeout_seconds": 600,
+        "floss_file_timeout_max_seconds": 60 * 60,
         "floss_total_timeout_seconds": 2 * 60 * 60,
         **_INVENTORY_DEFAULTS,
     },
@@ -143,11 +166,14 @@ class ResourceProfile:
     pids_limit: int
     tmp_mib: int
     host_timeout_seconds: int
+    analysis_workers: int
     max_capa_files: int
     capa_file_timeout_seconds: int
+    capa_file_timeout_max_seconds: int
     capa_total_timeout_seconds: int
     max_floss_files: int
     floss_file_timeout_seconds: int
+    floss_file_timeout_max_seconds: int
     floss_total_timeout_seconds: int
     max_file_count: int
     max_total_gib: int
@@ -157,6 +183,17 @@ class ResourceProfile:
     @property
     def is_custom(self) -> bool:
         return self.name == CUSTOM
+
+    @property
+    def effective_workers(self) -> int:
+        # Each analysis keeps one CPU busy and can need about
+        # WORKER_MEMORY_MIB, so never run more than the container fits.
+        by_cpu = max(1, math.floor(self.cpus))
+        by_memory = max(
+            1,
+            (self.memory_mib - self.tmp_mib) // WORKER_MEMORY_MIB,
+        )
+        return min(self.analysis_workers, by_cpu, by_memory)
 
     def values(self) -> dict[str, Any]:
         """Return every profile field in canonical units."""
@@ -181,9 +218,13 @@ class ResourceProfile:
             max_total_bytes=self.max_total_gib * _GIB,
             max_file_bytes=self.max_file_gib * _GIB,
             max_depth=self.max_depth,
+            analysis_workers=self.effective_workers,
             max_capa_files=self.max_capa_files,
             capa_file_timeout_seconds=float(
                 self.capa_file_timeout_seconds
+            ),
+            capa_file_timeout_max_seconds=float(
+                self.capa_file_timeout_max_seconds
             ),
             capa_total_timeout_seconds=float(
                 self.capa_total_timeout_seconds
@@ -191,6 +232,9 @@ class ResourceProfile:
             max_floss_files=self.max_floss_files,
             floss_file_timeout_seconds=float(
                 self.floss_file_timeout_seconds
+            ),
+            floss_file_timeout_max_seconds=float(
+                self.floss_file_timeout_max_seconds
             ),
             floss_total_timeout_seconds=float(
                 self.floss_total_timeout_seconds
@@ -266,6 +310,14 @@ def _cross_field_problems(
                 f"{analyzer}_file_timeout_seconds",
                 f"The {analyzer} per-file timeout cannot exceed the "
                 f"{analyzer} total budget.",
+            ))
+        # The cap may exceed the total budget: a file never gets more
+        # time than the budget has left when it starts.
+        if values[f"{analyzer}_file_timeout_max_seconds"] < per_file:
+            problems.append((
+                f"{analyzer}_file_timeout_max_seconds",
+                f"The {analyzer} large-file timeout cap cannot be less "
+                f"than the {analyzer} per-file timeout.",
             ))
 
     if values["max_file_gib"] > values["max_total_gib"]:
@@ -475,4 +527,5 @@ def profile_summary(profile: ResourceProfile) -> dict[str, Any]:
         "base": profile.base,
         "values": profile.values(),
         "changed": profile.changed_fields(),
+        "effective_workers": profile.effective_workers,
     }

@@ -42,6 +42,13 @@ const GROUPS: DisplayGroup[] = [
       { key: "pids_limit", label: "Process limit", unit: "", scale: 1, step: 1 },
       { key: "tmp_mib", label: "Temporary space", unit: "MiB", scale: 1, step: 64 },
       {
+        key: "analysis_workers",
+        label: "Parallel analyses",
+        unit: "max",
+        scale: 1,
+        step: 1,
+      },
+      {
         key: "host_timeout_seconds",
         label: "Overall time limit",
         unit: "h",
@@ -57,10 +64,17 @@ const GROUPS: DisplayGroup[] = [
       { key: "max_capa_files", label: "File cap", unit: "files", scale: 1, step: 1 },
       {
         key: "capa_file_timeout_seconds",
-        label: "Per-file timeout",
+        label: "Per-file timeout (up to 1 MiB)",
         unit: "min",
         scale: 60,
         step: 0.5,
+      },
+      {
+        key: "capa_file_timeout_max_seconds",
+        label: "Large-file timeout cap",
+        unit: "min",
+        scale: 60,
+        step: 1,
       },
       {
         key: "capa_total_timeout_seconds",
@@ -78,10 +92,17 @@ const GROUPS: DisplayGroup[] = [
       { key: "max_floss_files", label: "File cap", unit: "files", scale: 1, step: 1 },
       {
         key: "floss_file_timeout_seconds",
-        label: "Per-file timeout",
+        label: "Per-file timeout (up to 1 MiB)",
         unit: "min",
         scale: 60,
         step: 0.5,
+      },
+      {
+        key: "floss_file_timeout_max_seconds",
+        label: "Large-file timeout cap",
+        unit: "min",
+        scale: 60,
+        step: 1,
       },
       {
         key: "floss_total_timeout_seconds",
@@ -164,6 +185,7 @@ function describeValues(values: ResourceValues): string {
   return [
     plural(values.cpus, "CPU"),
     `${trimNumber(values.memory_mib / 1024)} GiB memory`,
+    `up to ${trimNumber(values.analysis_workers ?? 1)} parallel`,
     `capa ${formatDuration(values.capa_total_timeout_seconds)}`,
     `FLOSS ${formatDuration(values.floss_total_timeout_seconds)}`,
     `stops after ${formatDuration(values.host_timeout_seconds)}`,
@@ -212,6 +234,11 @@ export function describeResources(record: unknown): string | null {
     `capa ${formatDuration(capa)}`,
     `FLOSS ${formatDuration(floss)}`,
   ];
+  const workers = numberField(data, "workers")
+    ?? numberField(data, "effective_workers");
+  if (workers !== null) {
+    parts.splice(3, 0, `${trimNumber(workers)} parallel`);
+  }
   if (typeof data.enforced === "boolean") {
     parts.push(data.enforced ? "limits confirmed" : "limits not confirmed");
   }

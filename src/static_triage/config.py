@@ -19,15 +19,20 @@ class ScanLimits:
     hash_chunk_bytes: int = 1024 * 1024
     max_display_path_chars: int = 500
 
+    # Files analyzed at the same time by capa or FLOSS
+    analysis_workers: int = 2
+
     # capa limits
     max_capa_files: int = 250
     capa_file_timeout_seconds: float = 300.0
+    capa_file_timeout_max_seconds: float = 1_800.0
     capa_total_timeout_seconds: float = 3_600.0
     capa_max_output_bytes: int = 16_000_000
 
     # FLOSS limits
     max_floss_files: int = 50
     floss_file_timeout_seconds: float = 600.0
+    floss_file_timeout_max_seconds: float = 1_800.0
     floss_total_timeout_seconds: float = 3_600.0
     floss_max_output_bytes: int = 16_000_000
     floss_max_strings: int = 2_000
