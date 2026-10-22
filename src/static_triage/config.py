@@ -21,6 +21,9 @@ class ScanLimits:
 
     # Files analyzed at the same time by capa or FLOSS
     analysis_workers: int = 2
+    # Memory capa and FLOSS may plan around: the container's memory minus
+    # what the scanner itself keeps back (Balanced: 4096 - 256 MiB).
+    analysis_memory_mib: int = 3_840
 
     # capa limits
     max_capa_files: int = 250

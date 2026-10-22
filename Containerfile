@@ -94,3 +94,7 @@ ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
 ENTRYPOINT ["python3", "-m", "static_triage.cli"]
+
+# The ClamAV base image checks a clamd service we never start, which made
+# every scan container show as "unhealthy". Scans use clamscan instead.
+HEALTHCHECK NONE

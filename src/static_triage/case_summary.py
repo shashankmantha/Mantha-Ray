@@ -119,6 +119,7 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     timed_out = sum(1 for r in results if r.get("timed_out") is True) - stopped
     failed = len(results) - completed - timed_out - stopped
     retried = sum(1 for r in results if r.get("retried_alone") is True)
+    too_big = sum(1 for r in results if r.get("needs_more_memory") is True)
     unique = data.get("unique_eligible_files", data.get("eligible_files", 0))
     counts = [
         f"{unique} unique",
@@ -132,6 +133,8 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         counts.append(f"{failed} failed")
     if retried:
         counts.append(f"{retried} retried alone")
+    if too_big:
+        counts.append(f"{too_big} need more memory")
     not_reached = data.get("skipped_due_to_timeout") or 0
     if not_reached:
         counts.append(f"{not_reached} not reached")
@@ -145,7 +148,7 @@ def analyzer_lines(name: str, data: object) -> list[str]:
 
     positioned = [r for r in results if isinstance(r.get("analysis_position"), int)]
     if positioned:
-        lines.append("  order analyzed:")
+        lines.append("  order analyzed (time, peak memory):")
         ordered = sorted(positioned, key=lambda r: r["analysis_position"])
     else:
         lines.append("  results (order not recorded):")
@@ -167,14 +170,19 @@ def analyzer_lines(name: str, data: object) -> list[str]:
             notes.append(f"limit {format_duration(limit)}")
         if status == "stopped":
             notes.append("budget ran out")
-        if result.get("retried_alone"):
+        if result.get("needs_more_memory"):
+            notes.append("needs more memory than this profile")
+        elif result.get("retried_alone"):
             notes.append("retried alone after running out of memory")
         elif status == "failed" and result.get("return_code") in (-9, 137):
             notes.append("out of memory")
         note = f"  ({'; '.join(notes)})" if notes else ""
+        peak = _number(result.get("peak_memory_mib"))
+        shown_peak = f"{peak / 1024:.1f} GiB" if peak is not None else ""
         lines.append(
             f"  {position if position is not None else '-':>4}  "
             f"{status:<9}  {format_duration(seconds):>12}  "
+            f"{shown_peak:>8}  "
             f"{clean(result.get('relative_path', '?'))}{note}"
         )
     if len(ordered) > MAX_ORDER_LINES:

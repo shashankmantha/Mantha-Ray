@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import ScanLimits
+from .memory_budget import analysis_budget_mib
 
 SCHEMA_VERSION = 2
 
@@ -219,6 +220,7 @@ class ResourceProfile:
             max_file_bytes=self.max_file_gib * _GIB,
             max_depth=self.max_depth,
             analysis_workers=self.effective_workers,
+            analysis_memory_mib=analysis_budget_mib(self.memory_mib),
             max_capa_files=self.max_capa_files,
             capa_file_timeout_seconds=float(
                 self.capa_file_timeout_seconds

@@ -260,6 +260,7 @@ def run_inventory_scan(
                     .capa_file_timeout_max_seconds
                 ),
                 workers=config.limits.analysis_workers,
+                memory_budget_mib=config.limits.analysis_memory_mib,
                 total_timeout_seconds=(
                     config.limits
                     .capa_total_timeout_seconds
@@ -346,6 +347,7 @@ def run_inventory_scan(
                     .floss_file_timeout_max_seconds
                 ),
                 workers=config.limits.analysis_workers,
+                memory_budget_mib=config.limits.analysis_memory_mib,
                 total_timeout_seconds=(
                     config.limits
                     .floss_total_timeout_seconds

@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_progress import FileProgress
+from .memory_budget import estimate_mib, memory_policy
 from .parallel import (
     looks_memory_killed,
     run_groups,
@@ -102,6 +103,12 @@ class FlossResult:
     # Killed for memory while sharing the container, then run alone.
     retried_alone: bool = False
     first_attempt: dict[str, Any] | None = None
+    # Highest resident memory measured for the analysis process.
+    peak_memory_mib: float | None = None
+    # Memory reserved for it when scheduling, if a budget was set.
+    memory_estimate_mib: int | None = None
+    # Ran out of memory with nothing else running: the profile is too small.
+    needs_more_memory: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -134,6 +141,9 @@ class FlossResult:
             "stopped_at_budget_end": self.stopped_at_budget_end,
             "retried_alone": self.retried_alone,
             "first_attempt": self.first_attempt,
+            "peak_memory_mib": self.peak_memory_mib,
+            "memory_estimate_mib": self.memory_estimate_mib,
+            "needs_more_memory": self.needs_more_memory,
         }
 
 
@@ -155,6 +165,7 @@ class FlossBatchResult:
     scheduling_policy: str = SCHEDULING_POLICY
     workers: int = 1
     file_timeout_policy: dict[str, float] | None = None
+    memory_policy: dict[str, Any] | None = None
     skipped_size_paths: tuple[str, ...] = ()
 
     @property
@@ -167,6 +178,7 @@ class FlossBatchResult:
             "scheduling_policy": self.scheduling_policy,
             "workers": self.workers,
             "file_timeout_policy": self.file_timeout_policy,
+            "memory_policy": self.memory_policy,
             "size_limit_bytes": FLOSS_MAX_FILE_BYTES,
             "skipped_due_to_size": self.skipped_due_to_size,
             "skipped_size_paths": list(self.skipped_size_paths),
@@ -466,6 +478,7 @@ def _normalize_result(
         stdout=execution.stdout,
         stderr=execution.stderr,
         error="; ".join(issues) or None,
+        peak_memory_mib=execution.peak_memory_mib,
     )
 
 
@@ -635,6 +648,7 @@ def run_floss_batch(
     on_file: FileProgress | None = None,
     workers: int = 1,
     file_timeout_max_seconds: float | None = None,
+    memory_budget_mib: int | None = None,
 ) -> FlossBatchResult:
     """Run FLOSS over a bounded set of eligible PE files."""
 
@@ -736,6 +750,11 @@ def run_floss_batch(
             result.return_code,
             result.timed_out,
         ),
+        memory_budget_mib=memory_budget_mib,
+        memory_for=lambda group: estimate_mib(
+            "floss",
+            group.representative.size_bytes,
+        ),
     )
 
     results = [
@@ -756,6 +775,15 @@ def run_floss_batch(
                     "duration_seconds": item.first_attempt.duration_seconds,
                     "error": item.first_attempt.error,
                 }
+            ),
+            peak_memory_mib=item.result.peak_memory_mib,
+            memory_estimate_mib=item.memory_estimate_mib,
+            needs_more_memory=(
+                not item.shared
+                and looks_memory_killed(
+                    item.result.return_code,
+                    item.result.timed_out,
+                )
             ),
         )
         for item in run.finished
@@ -789,6 +817,13 @@ def run_floss_batch(
     if failed_files:
         issues.append(
             f"{failed_files} FLOSS analyses were incomplete"
+        )
+
+    too_big = sum(result.needs_more_memory for result in results)
+    if too_big:
+        issues.append(
+            f"{too_big} FLOSS analyses ran out of memory even when "
+            "run alone; this profile needs more memory for them"
         )
 
     budget_stopped = sum(
@@ -838,5 +873,10 @@ def run_floss_batch(
         file_timeout_policy=timeout_policy(
             file_timeout_seconds,
             max_timeout,
+        ),
+        memory_policy=(
+            memory_policy("floss", memory_budget_mib)
+            if memory_budget_mib is not None
+            else None
         ),
     )

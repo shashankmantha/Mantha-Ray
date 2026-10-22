@@ -23,6 +23,8 @@ class CommandResult:
     timed_out: bool
     output_truncated: bool
     duration_seconds: float
+    # Highest resident memory seen for the process, if it could be read.
+    peak_memory_mib: float | None = None
 
 
 class _BoundedCapture:
@@ -100,6 +102,35 @@ def _terminate_process_group(
     process.wait()
 
 
+PEAK_SAMPLE_SECONDS = 1.0
+
+
+def _read_peak_rss_kib(pid: int) -> int | None:
+    # VmHWM is the kernel's own high-water mark for the process's resident
+    # memory, so sampling it catches peaks between samples too.
+    try:
+        with open(f"/proc/{pid}/status", encoding="ascii", errors="replace") as handle:
+            for line in handle:
+                if line.startswith("VmHWM:"):
+                    return int(line.split()[1])
+    except (OSError, ValueError, IndexError):
+        return None
+    return None
+
+
+def _watch_peak(
+    pid: int,
+    stop: threading.Event,
+    peak: list[int],
+) -> None:
+    while True:
+        value = _read_peak_rss_kib(pid)
+        if value is not None and value > peak[0]:
+            peak[0] = value
+        if stop.wait(PEAK_SAMPLE_SECONDS):
+            return
+
+
 def run_command(
     command: Sequence[str],
     *,
@@ -156,6 +187,15 @@ def run_command(
     stdout_thread.start()
     stderr_thread.start()
 
+    peak = [0]
+    stop_watching = threading.Event()
+    peak_thread = threading.Thread(
+        target=_watch_peak,
+        args=(process.pid, stop_watching, peak),
+        daemon=True,
+    )
+    peak_thread.start()
+
     timed_out = False
 
     try:
@@ -164,6 +204,8 @@ def run_command(
         timed_out = True
         _terminate_process_group(process)
 
+    stop_watching.set()
+    peak_thread.join()
     stdout_thread.join()
     stderr_thread.join()
 
@@ -184,4 +226,7 @@ def run_command(
             or stderr_capture.truncated
         ),
         duration_seconds=duration,
+        peak_memory_mib=(
+            round(peak[0] / 1024, 1) if peak[0] else None
+        ),
     )

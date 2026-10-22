@@ -621,6 +621,33 @@ def _analysis_plan_lines(analyzer: dict[str, Any]) -> list[str]:
     stopped = sum(
         1 for item in results if item.get("stopped_at_budget_end") is True
     )
+    policy_memory = analyzer.get("memory_policy")
+    if isinstance(policy_memory, dict) and isinstance(
+        policy_memory.get("budget_mib"), int
+    ):
+        lines.append(
+            "- Memory planning: up to "
+            f"{policy_memory['budget_mib'] / 1024:.1f} GiB for analyses; "
+            "files estimated to need more run alone"
+        )
+    peaks = [
+        item.get("peak_memory_mib")
+        for item in results
+        if isinstance(item.get("peak_memory_mib"), (int, float))
+        and not isinstance(item.get("peak_memory_mib"), bool)
+    ]
+    if peaks:
+        lines.append(
+            f"- Highest memory used by one analysis: {max(peaks) / 1024:.1f} GiB"
+        )
+    too_big = sum(
+        1 for item in results if item.get("needs_more_memory") is True
+    )
+    if too_big:
+        lines.append(
+            "- Ran out of memory even when run alone (needs a profile "
+            f"with more memory): {too_big}"
+        )
     if retried:
         lines.append(
             f"- Retried alone after running out of memory: {retried}"

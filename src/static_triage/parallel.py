@@ -75,6 +75,10 @@ class Finished(Generic[R]):
     limit_seconds: float = 0.0
     # The memory-killed first attempt, when this result is a solo retry.
     first_attempt: R | None = None
+    # Whether another analysis ran at the same time as this one.
+    shared: bool = False
+    # Memory reserved for this analysis when it started, if budgeted.
+    memory_estimate_mib: int | None = None
 
     @property
     def capped_by_budget(self) -> bool:
@@ -96,6 +100,8 @@ class _Job:
     alone: bool = False
     shared: bool = False
     first_attempt: object = None
+    reserve: int = 0
+    estimate: int | None = None
 
 
 def run_groups(
@@ -111,11 +117,15 @@ def run_groups(
     started_at: float | None = None,
     on_file: FileProgress | None = None,
     retry_alone_if: Callable[[R], bool] | None = None,
+    memory_budget_mib: int | None = None,
+    memory_for: Callable[[AnalysisGroup], int] | None = None,
 ) -> PoolRun[R]:
     # Groups start in priority order while the stage budget lasts. Each
     # file's timeout is capped by the budget left when it starts, so the
     # stage cannot overrun. A file killed for memory while sharing the
-    # container is retried once with nothing else running. Progress
+    # container is retried once with nothing else running. With a memory
+    # budget, a file only starts when its estimate fits beside the running
+    # ones; a file estimated above the whole budget runs alone. Progress
     # callbacks run on this thread only.
     if workers < 1:
         raise ValueError(f"{label} needs at least one worker")
@@ -127,6 +137,9 @@ def run_groups(
     retries: list[_Job] = []
     next_index = 0
     out_of_time = False
+
+    def reserved() -> int:
+        return sum(job.reserve for job in pending.values())
 
     def remaining() -> float:
         return total_timeout_seconds - (clock() - started)
@@ -151,6 +164,8 @@ def run_groups(
                 job.timeout,
                 job.limit,
                 first_attempt,
+                job.shared,
+                job.estimate,
             )
         )
         complete, timed_out, seconds = outcome(result)
@@ -189,6 +204,8 @@ def run_groups(
                             job.limit,
                             alone=True,
                             first_attempt=job.first_attempt,
+                            reserve=memory_budget_mib or 0,
+                            estimate=job.estimate,
                         )
                         emit(
                             started_message(
@@ -216,9 +233,33 @@ def run_groups(
                         # Later files are no smaller, so stop starting.
                         out_of_time = True
                         break
+                    estimate = None
+                    reserve = 0
+                    if memory_budget_mib is not None and memory_for is not None:
+                        estimate = memory_for(group)
+                        reserve = min(estimate, memory_budget_mib)
+                        if pending and reserved() + reserve > memory_budget_mib:
+                            # Wait for memory; later files need no less.
+                            break
                     next_index += 1
-                    job = _Job(group, next_index, min(limit, left), limit)
-                    emit(started_message(label, next_index, total, group))
+                    job = _Job(
+                        group,
+                        next_index,
+                        min(limit, left),
+                        limit,
+                        reserve=reserve,
+                        estimate=estimate,
+                    )
+                    alone = (
+                        memory_budget_mib is not None
+                        and estimate is not None
+                        and estimate >= memory_budget_mib
+                    )
+                    emit(
+                        started_message(
+                            label, next_index, total, group, alone=alone
+                        )
+                    )
                     submit(pool, job)
 
             if not pending:
