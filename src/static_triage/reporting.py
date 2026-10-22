@@ -613,6 +613,22 @@ def _analysis_plan_lines(analyzer: dict[str, Any]) -> list[str]:
             )
         else:
             lines.append(f"- Per-file timeout: {_format_seconds(base)}")
+    results = [
+        item for item in analyzer.get("results") or []
+        if isinstance(item, dict)
+    ]
+    retried = sum(1 for item in results if item.get("retried_alone") is True)
+    stopped = sum(
+        1 for item in results if item.get("stopped_at_budget_end") is True
+    )
+    if retried:
+        lines.append(
+            f"- Retried alone after running out of memory: {retried}"
+        )
+    if stopped:
+        lines.append(
+            f"- Stopped at the end of the time budget: {stopped}"
+        )
     return lines
 
 

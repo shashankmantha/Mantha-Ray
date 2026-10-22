@@ -112,8 +112,13 @@ def analyzer_lines(name: str, data: object) -> list[str]:
 
     results = [r for r in data.get("results") or [] if isinstance(r, dict)]
     completed = sum(1 for r in results if r.get("complete") is True)
-    timed_out = sum(1 for r in results if r.get("timed_out") is True)
-    failed = len(results) - completed - timed_out
+    stopped = sum(
+        1 for r in results
+        if r.get("timed_out") is True and r.get("stopped_at_budget_end") is True
+    )
+    timed_out = sum(1 for r in results if r.get("timed_out") is True) - stopped
+    failed = len(results) - completed - timed_out - stopped
+    retried = sum(1 for r in results if r.get("retried_alone") is True)
     unique = data.get("unique_eligible_files", data.get("eligible_files", 0))
     counts = [
         f"{unique} unique",
@@ -121,8 +126,12 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         f"{completed} completed",
         f"{timed_out} timed out",
     ]
+    if stopped:
+        counts.append(f"{stopped} stopped at budget end")
     if failed:
         counts.append(f"{failed} failed")
+    if retried:
+        counts.append(f"{retried} retried alone")
     not_reached = data.get("skipped_due_to_timeout") or 0
     if not_reached:
         counts.append(f"{not_reached} not reached")
@@ -143,16 +152,26 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         ordered = results
     for result in ordered[:MAX_ORDER_LINES]:
         position = result.get("analysis_position")
-        status = "completed" if result.get("complete") else (
-            "timed out" if result.get("timed_out") else "failed"
-        )
+        if result.get("complete"):
+            status = "completed"
+        elif result.get("timed_out") and result.get("stopped_at_budget_end"):
+            status = "stopped"
+        elif result.get("timed_out"):
+            status = "timed out"
+        else:
+            status = "failed"
         seconds = _number(result.get("duration_seconds")) or 0.0
         limit = _number(result.get("timeout_seconds"))
-        note = (
-            f"  (limit {format_duration(limit)})"
-            if limit is not None and status != "completed"
-            else ""
-        )
+        notes = []
+        if limit is not None and status != "completed":
+            notes.append(f"limit {format_duration(limit)}")
+        if status == "stopped":
+            notes.append("budget ran out")
+        if result.get("retried_alone"):
+            notes.append("retried alone after running out of memory")
+        elif status == "failed" and result.get("return_code") in (-9, 137):
+            notes.append("out of memory")
+        note = f"  ({'; '.join(notes)})" if notes else ""
         lines.append(
             f"  {position if position is not None else '-':>4}  "
             f"{status:<9}  {format_duration(seconds):>12}  "

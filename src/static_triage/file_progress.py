@@ -57,9 +57,12 @@ def started_message(
     position: int,
     total: int,
     group: AnalysisGroup,
+    *,
+    alone: bool = False,
 ) -> str:
     size = format_size(group.representative.size_bytes)
-    return f"{analyzer} {position}/{total} started: {_subject(group)} ({size})"
+    verb = "started alone" if alone else "started"
+    return f"{analyzer} {position}/{total} {verb}: {_subject(group)} ({size})"
 
 
 def finished_message(
@@ -71,12 +74,28 @@ def finished_message(
     complete: bool,
     timed_out: bool,
     duration_seconds: float,
+    stopped_at_budget_end: bool = False,
 ) -> str:
     took = format_duration(duration_seconds)
-    if timed_out:
+    if stopped_at_budget_end:
+        outcome = f"stopped at the end of the time budget after {took}"
+    elif timed_out:
         outcome = f"timed out after {took}"
     elif complete:
         outcome = f"completed in {took}"
     else:
         outcome = f"failed after {took}"
     return f"{analyzer} {position}/{total} {outcome}: {_subject(group)}"
+
+def memory_retry_message(
+    analyzer: str,
+    position: int,
+    total: int,
+    group: AnalysisGroup,
+    duration_seconds: float,
+) -> str:
+    took = format_duration(duration_seconds)
+    return (
+        f"{analyzer} {position}/{total} ran out of memory after {took}; "
+        f"will retry alone when the other analyses finish: {_subject(group)}"
+    )

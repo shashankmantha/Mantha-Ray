@@ -10,7 +10,12 @@ from pathlib import Path
 from typing import Any
 
 from .file_progress import FileProgress
-from .parallel import run_groups, scaled_timeout, timeout_policy
+from .parallel import (
+    looks_memory_killed,
+    run_groups,
+    scaled_timeout,
+    timeout_policy,
+)
 from .scheduling import (
     SCHEDULING_POLICY,
     in_path_order,
@@ -92,6 +97,11 @@ class FlossResult:
     analysis_position: int | None = None
     # The time limit this file was given, after size scaling and budget.
     timeout_seconds: float | None = None
+    # Timed out only because the stage's time budget ran out.
+    stopped_at_budget_end: bool = False
+    # Killed for memory while sharing the container, then run alone.
+    retried_alone: bool = False
+    first_attempt: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -121,6 +131,9 @@ class FlossResult:
             "reused_for": list(self.reused_for),
             "analysis_position": self.analysis_position,
             "timeout_seconds": self.timeout_seconds,
+            "stopped_at_budget_end": self.stopped_at_budget_end,
+            "retried_alone": self.retried_alone,
+            "first_attempt": self.first_attempt,
         }
 
 
@@ -386,6 +399,17 @@ def _normalize_result(
         issues.append(
             "FLOSS refused the file because it exceeds "
             "its 16 MiB deobfuscation limit"
+        )
+
+    elif looks_memory_killed(
+        execution.return_code,
+        execution.timed_out,
+    ):
+        status = FlossStatus.ERROR
+        issues.append(
+            "FLOSS was killed (exit code "
+            f"{execution.return_code}), most likely because the "
+            "container ran out of memory"
         )
 
     elif execution.return_code != 0:
@@ -708,6 +732,10 @@ def run_floss_batch(
         clock=lambda: time.monotonic(),
         started_at=started,
         on_file=on_file,
+        retry_alone_if=lambda result: looks_memory_killed(
+            result.return_code,
+            result.timed_out,
+        ),
     )
 
     results = [
@@ -716,6 +744,19 @@ def run_floss_batch(
             reused_for=item.group.reused_paths,
             analysis_position=item.position,
             timeout_seconds=item.timeout_seconds,
+            stopped_at_budget_end=(
+                item.result.timed_out and item.capped_by_budget
+            ),
+            retried_alone=item.first_attempt is not None,
+            first_attempt=(
+                None
+                if item.first_attempt is None
+                else {
+                    "return_code": item.first_attempt.return_code,
+                    "duration_seconds": item.first_attempt.duration_seconds,
+                    "error": item.first_attempt.error,
+                }
+            ),
         )
         for item in run.finished
     ]
@@ -748,6 +789,15 @@ def run_floss_batch(
     if failed_files:
         issues.append(
             f"{failed_files} FLOSS analyses were incomplete"
+        )
+
+    budget_stopped = sum(
+        result.stopped_at_budget_end for result in results
+    )
+    if budget_stopped:
+        issues.append(
+            f"{budget_stopped} of them stopped at the end of the "
+            "time budget"
         )
 
     complete = (
