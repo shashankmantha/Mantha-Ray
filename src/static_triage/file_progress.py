@@ -59,9 +59,12 @@ def started_message(
     group: AnalysisGroup,
     *,
     alone: bool = False,
+    detail: str | None = None,
 ) -> str:
     size = format_size(group.representative.size_bytes)
     verb = "started alone" if alone else "started"
+    if detail:
+        verb += f" ({detail})"
     return f"{analyzer} {position}/{total} {verb}: {_subject(group)} ({size})"
 
 

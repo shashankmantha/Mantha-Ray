@@ -119,6 +119,7 @@ def run_groups(
     retry_alone_if: Callable[[R], bool] | None = None,
     memory_budget_mib: int | None = None,
     memory_for: Callable[[AnalysisGroup], int] | None = None,
+    detail_for: Callable[[AnalysisGroup], str | None] | None = None,
 ) -> PoolRun[R]:
     # Groups start in priority order while the stage budget lasts. Each
     # file's timeout is capped by the budget left when it starts, so the
@@ -257,7 +258,8 @@ def run_groups(
                     )
                     emit(
                         started_message(
-                            label, next_index, total, group, alone=alone
+                            label, next_index, total, group, alone=alone,
+                            detail=detail_for(group) if detail_for else None,
                         )
                     )
                     submit(pool, job)

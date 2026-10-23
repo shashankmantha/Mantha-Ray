@@ -1261,6 +1261,31 @@ def _render_markdown(
         ]
     )
 
+    plain = [
+        item for item in floss.get("results") or []
+        if isinstance(item, dict) and item.get("mode") == "plain"
+    ]
+    if plain:
+        limit = floss.get("emulation_max_bytes")
+        shown = (
+            f"{limit // (1024 * 1024)} MiB"
+            if isinstance(limit, int) and not isinstance(limit, bool)
+            else "the emulation limit"
+        )
+        lines.append(
+            f"- Plain strings only (over {shown}, no emulation): "
+            f"`{len(plain)}`"
+        )
+        for item in plain[:10]:
+            kept = len(item.get("strings") or [])
+            lines.append(
+                "  - "
+                + _markdown_code(str(item.get("relative_path", "?")))
+                + f" ({kept} strings worth a look)"
+            )
+        if len(plain) > 10:
+            lines.append(f"  - and {len(plain) - 10} more")
+
     size_skipped = floss.get("skipped_size_paths") or []
     if isinstance(size_skipped, list) and size_skipped:
         lines.append(

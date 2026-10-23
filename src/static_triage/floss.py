@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from dataclasses import dataclass, replace
@@ -10,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from .file_progress import FileProgress
+from . import plain_strings
 from .memory_budget import estimate_mib, memory_policy
 from .parallel import (
     looks_memory_killed,
@@ -42,6 +42,20 @@ FLOSS_MAX_FILE_BYTES = 16 * 1024 * 1024
 
 _FLOSS_SIZE_REFUSAL = "cannot deobfuscate strings from files larger than"
 
+# FLOSS's emulation (stack, tight and decoded strings) is only run on
+# files up to this size. Measured on Door Kickers 2 (2026-10-21, alone,
+# 6 GiB): 2 MB libraries took 9-12 min, but 6.8-8.1 MB game executables
+# failed after 47 min or ran past 60 min. Bigger files, including those
+# over FLOSS's own 16 MiB limit, get a fast plain-strings pass instead.
+FLOSS_EMULATION_MAX_BYTES = 4 * 1024 * 1024
+
+# Budget and memory the plain-strings pass plans with; it takes seconds.
+PLAIN_TIMEOUT_SECONDS = 300.0
+PLAIN_MEMORY_MIB = 512
+
+EMULATION = "emulation"
+PLAIN = "plain"
+
 
 class FlossStatus(str, Enum):
     """Normalized FLOSS outcomes."""
@@ -66,14 +80,19 @@ class FlossString:
     value: str
     encoding: str | None
     truncated: bool
+    # Why a plain string was kept, e.g. "url" or "miner pool".
+    category: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        record = {
             "kind": self.kind,
             "value": self.value,
             "encoding": self.encoding,
             "truncated": self.truncated,
         }
+        if self.category is not None:
+            record["category"] = self.category
+        return record
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,6 +128,10 @@ class FlossResult:
     memory_estimate_mib: int | None = None
     # Ran out of memory with nothing else running: the profile is too small.
     needs_more_memory: bool = False
+    # "emulation" (FLOSS proper) or "plain" (fast pass for big files).
+    mode: str = EMULATION
+    # For plain mode: whether the whole file was read.
+    fully_scanned: bool | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -144,6 +167,8 @@ class FlossResult:
             "peak_memory_mib": self.peak_memory_mib,
             "memory_estimate_mib": self.memory_estimate_mib,
             "needs_more_memory": self.needs_more_memory,
+            "mode": self.mode,
+            "fully_scanned": self.fully_scanned,
         }
 
 
@@ -180,6 +205,10 @@ class FlossBatchResult:
             "file_timeout_policy": self.file_timeout_policy,
             "memory_policy": self.memory_policy,
             "size_limit_bytes": FLOSS_MAX_FILE_BYTES,
+            "emulation_max_bytes": FLOSS_EMULATION_MAX_BYTES,
+            "plain_strings_files": sum(
+                result.mode == PLAIN for result in self.results
+            ),
             "skipped_due_to_size": self.skipped_due_to_size,
             "skipped_size_paths": list(self.skipped_size_paths),
             "complete": self.complete,
@@ -230,6 +259,15 @@ class FlossSelection:
     groups: tuple[AnalysisGroup, ...] = ()
     unique_eligible_count: int = 0
     oversized_paths: tuple[str, ...] = ()
+
+
+def wants_plain_strings(entry: InventoryEntry) -> bool:
+    size = entry.size_bytes
+    return (
+        isinstance(size, int)
+        and not isinstance(size, bool)
+        and size > FLOSS_EMULATION_MAX_BYTES
+    )
 
 
 def _exceeds_floss_limit(entry: InventoryEntry) -> bool:
@@ -596,41 +634,73 @@ def select_floss_entries(
         )
     ]
 
-    oversized = sorted(
-        (
-            entry.relative_path
-            for entry in eligible
-            if _exceeds_floss_limit(entry)
-        ),
-        key=os.fsencode,
-    )
-    runnable = [
-        entry
-        for entry in eligible
-        if not _exceeds_floss_limit(entry)
+    groups = prioritize_groups(group_entries_by_sha256(eligible))
+    # Big files get the fast plain-strings pass, first, so they are always
+    # covered; they don't count against the file cap.
+    plain_groups = [
+        group for group in groups
+        if wants_plain_strings(group.representative)
     ]
-
-    groups = prioritize_groups(
-        group_entries_by_sha256(runnable)
-    )
-    selected_groups = groups[:max_files]
-    selected = tuple(
-        group.representative
-        for group in selected_groups
+    emulation_groups = [
+        group for group in groups
+        if not wants_plain_strings(group.representative)
+    ]
+    selected_groups = (
+        tuple(plain_groups) + tuple(emulation_groups[:max_files])
     )
 
     return FlossSelection(
-        oversized_paths=tuple(oversized),
-        entries=selected,
+        entries=tuple(group.representative for group in selected_groups),
         eligible_count=len(eligible),
-        skipped_due_to_limit=(
-            sum(
-                len(group.entries)
-                for group in groups[max_files:]
-            )
+        skipped_due_to_limit=sum(
+            len(group.entries) for group in emulation_groups[max_files:]
         ),
         groups=selected_groups,
         unique_eligible_count=len(groups),
+    )
+
+
+def run_plain_strings(
+    target: Path,
+    scan_root: Path,
+) -> FlossResult:
+    relative = target.relative_to(scan_root)
+    if ".." in relative.parts or target.is_symlink() or not target.is_file():
+        raise ValueError("plain-strings target must be a regular file beneath the scan root")
+    started = time.monotonic()
+    found = plain_strings.extract(target)
+    duration = time.monotonic() - started
+    issues = []
+    if not found.fully_scanned:
+        issues.append(
+            "plain strings: only the first "
+            f"{found.scanned_bytes // (1024 * 1024)} MiB were read"
+        )
+    return FlossResult(
+        status=FlossStatus.COMPLETED,
+        complete=found.fully_scanned,
+        relative_path=relative.as_posix(),
+        return_code=0,
+        strings=tuple(
+            FlossString(
+                kind="static",
+                value=match.value,
+                encoding=match.encoding,
+                truncated=match.truncated,
+                category=match.category,
+            )
+            for match in found.matches
+        ),
+        total_strings=found.total_strings,
+        strings_truncated=found.matches_truncated,
+        timed_out=False,
+        output_truncated=False,
+        duration_seconds=duration,
+        stdout="",
+        stderr="",
+        error="; ".join(issues) or None,
+        mode=PLAIN,
+        fully_scanned=found.fully_scanned,
     )
 
 
@@ -696,6 +766,32 @@ def run_floss_batch(
 
     def analyze(group: AnalysisGroup, timeout: float) -> FlossResult:
         entry = group.representative
+        if wants_plain_strings(entry):
+            try:
+                return run_plain_strings(
+                    scan_root / Path(entry.relative_path),
+                    scan_root,
+                )
+            except (OSError, ValueError) as exc:
+                return FlossResult(
+                    status=FlossStatus.ERROR,
+                    complete=False,
+                    relative_path=entry.relative_path,
+                    return_code=-1,
+                    strings=(),
+                    total_strings=0,
+                    strings_truncated=False,
+                    timed_out=False,
+                    output_truncated=False,
+                    duration_seconds=0.0,
+                    stdout="",
+                    stderr="",
+                    error=(
+                        "plain-strings pass failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    ),
+                    mode=PLAIN,
+                )
         try:
             return run_floss(
                 scan_root / Path(entry.relative_path),
@@ -732,10 +828,14 @@ def run_floss_batch(
         label="FLOSS",
         workers=workers,
         total_timeout_seconds=total_timeout_seconds,
-        timeout_for=lambda group: scaled_timeout(
-            group.representative.size_bytes,
-            base_seconds=file_timeout_seconds,
-            max_seconds=max_timeout,
+        timeout_for=lambda group: (
+            PLAIN_TIMEOUT_SECONDS
+            if wants_plain_strings(group.representative)
+            else scaled_timeout(
+                group.representative.size_bytes,
+                base_seconds=file_timeout_seconds,
+                max_seconds=max_timeout,
+            )
         ),
         outcome=lambda result: (
             result.complete,
@@ -746,14 +846,18 @@ def run_floss_batch(
         clock=lambda: time.monotonic(),
         started_at=started,
         on_file=on_file,
+        detail_for=lambda group: (
+            "plain strings" if wants_plain_strings(group.representative) else None
+        ),
         retry_alone_if=lambda result: looks_memory_killed(
             result.return_code,
             result.timed_out,
         ),
         memory_budget_mib=memory_budget_mib,
-        memory_for=lambda group: estimate_mib(
-            "floss",
-            group.representative.size_bytes,
+        memory_for=lambda group: (
+            PLAIN_MEMORY_MIB
+            if wants_plain_strings(group.representative)
+            else estimate_mib("floss", group.representative.size_bytes)
         ),
     )
 
@@ -868,7 +972,7 @@ def run_floss_batch(
             group.duplicate_count
             for group in analyzed_groups
         ),
-        skipped_size_paths=selection.oversized_paths,
+        skipped_size_paths=(),
         workers=workers,
         file_timeout_policy=timeout_policy(
             file_timeout_seconds,

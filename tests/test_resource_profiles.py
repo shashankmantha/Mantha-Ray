@@ -61,7 +61,7 @@ class PresetTests(unittest.TestCase):
             with self.subTest(preset=name):
                 profile = resolve_profile(name)
                 self.assertEqual(profile.capa_file_timeout_seconds, 300)
-                self.assertEqual(profile.floss_file_timeout_seconds, 600)
+                self.assertEqual(profile.floss_file_timeout_seconds, 1200)
 
     def test_presets_scale_in_order(self) -> None:
         low = resolve_profile("constrained")

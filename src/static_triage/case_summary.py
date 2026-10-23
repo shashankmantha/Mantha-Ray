@@ -120,6 +120,7 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     failed = len(results) - completed - timed_out - stopped
     retried = sum(1 for r in results if r.get("retried_alone") is True)
     too_big = sum(1 for r in results if r.get("needs_more_memory") is True)
+    plain = sum(1 for r in results if r.get("mode") == "plain")
     unique = data.get("unique_eligible_files", data.get("eligible_files", 0))
     counts = [
         f"{unique} unique",
@@ -135,6 +136,8 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         counts.append(f"{retried} retried alone")
     if too_big:
         counts.append(f"{too_big} need more memory")
+    if plain:
+        counts.append(f"{plain} plain strings only")
     not_reached = data.get("skipped_due_to_timeout") or 0
     if not_reached:
         counts.append(f"{not_reached} not reached")
@@ -170,6 +173,12 @@ def analyzer_lines(name: str, data: object) -> list[str]:
             notes.append(f"limit {format_duration(limit)}")
         if status == "stopped":
             notes.append("budget ran out")
+        if result.get("mode") == "plain":
+            kept = result.get("strings")
+            notes.append(
+                "plain strings only"
+                + (f"; {len(kept)} worth a look" if isinstance(kept, list) else "")
+            )
         if result.get("needs_more_memory"):
             notes.append("needs more memory than this profile")
         elif result.get("retried_alone"):

@@ -168,14 +168,20 @@ class SelectionTests(unittest.TestCase):
             with self.subTest(select=select.__name__):
                 selection = select(DOOR_KICKERS, max_files=3)
                 chosen = {e.relative_path for e in selection.entries}
-                self.assertEqual(
-                    chosen,
-                    {"ConfigTool.dll", "steam_api64.dll", "steam_api64.rne"},
-                )
-                # FLOSS never counts the two FFmpeg DLLs over its
-                # 16 MiB limit; they are not applicable rather than capped.
-                expected = 5 if select is select_capa_entries else 3
-                self.assertEqual(selection.skipped_due_to_limit, expected)
+                smallest = {"ConfigTool.dll", "steam_api64.dll", "steam_api64.rne"}
+                if select is select_capa_entries:
+                    self.assertEqual(chosen, smallest)
+                    self.assertEqual(selection.skipped_due_to_limit, 5)
+                else:
+                    # FLOSS gives files over its emulation limit a quick
+                    # plain-strings pass outside the cap; only OpenAL32.dll
+                    # (2.2 MB, still emulated) is capped.
+                    big = {
+                        "DoorKickers2.exe", "avcodec-59.dll",
+                        "avfilter-8.dll", "avformat-59.dll",
+                    }
+                    self.assertEqual(chosen, smallest | big)
+                    self.assertEqual(selection.skipped_due_to_limit, 1)
 
 
 class BatchSchedulingTests(unittest.TestCase):
@@ -241,7 +247,13 @@ class BatchSchedulingTests(unittest.TestCase):
                 positions = {
                     r.relative_path: r.analysis_position for r in result.results
                 }
-                for index, path in enumerate(order, start=1):
+                # FLOSS runs its quick plain-strings pass on big files
+                # first; the fake analyzer only records emulated files.
+                plain = sum(
+                    getattr(r, "mode", "emulation") == "plain"
+                    for r in result.results
+                )
+                for index, path in enumerate(order, start=1 + plain):
                     self.assertEqual(positions[path], index)
                 payload = result.to_dict()
                 self.assertEqual(payload["scheduling_policy"], SCHEDULING_POLICY)

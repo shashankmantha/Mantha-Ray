@@ -34,7 +34,7 @@ class ScanLimits:
 
     # FLOSS limits
     max_floss_files: int = 50
-    floss_file_timeout_seconds: float = 600.0
+    floss_file_timeout_seconds: float = 1_200.0
     floss_file_timeout_max_seconds: float = 1_800.0
     floss_total_timeout_seconds: float = 3_600.0
     floss_max_output_bytes: int = 16_000_000

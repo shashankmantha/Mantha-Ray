@@ -176,7 +176,12 @@ class BatchCallbackTests(unittest.TestCase):
             patch("static_triage.floss.run_floss", side_effect=run),
             tempfile.TemporaryDirectory() as temporary,
         ):
-            run_floss_batch(self.ENTRIES, Path(temporary), on_file=messages.append)
+            # Kept under FLOSS's emulation limit, so both files emulate.
+            run_floss_batch(
+                [entry("big.dll", 3_000_000), entry("small.dll", 1_000)],
+                Path(temporary),
+                on_file=messages.append,
+            )
         self.assertEqual(messages[0], "FLOSS 1/2 started: small.dll (1000 B)")
         self.assertEqual(messages[-1], "FLOSS 2/2 completed in 2 s: big.dll")
 
