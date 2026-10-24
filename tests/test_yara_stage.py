@@ -7,6 +7,7 @@ import stat
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from static_triage import stop_request
@@ -67,12 +68,15 @@ open(os.path.join(os.path.dirname(sys.argv[0]), "yr.log"), "a").write(
 # carries on; only matching files are printed.
 batch = "--scan-list" in rest
 targets = open(target).read().splitlines() if batch else [target]
+limit = int(dict(x for x in rest if isinstance(x, tuple))["--timeout"])
+open(os.path.join(os.path.dirname(sys.argv[0]), "yr.limits"), "a").write(f"{limit}\n")
 for target in targets:
     data = open(target, "rb").read().decode("latin-1")
     if "SLEEP" in data:
-        time.sleep(int(dict(x for x in rest if isinstance(x, tuple))["--timeout"]))
+        # Like yr: --timeout counts from the start of the whole run, and
+        # running out of time ends the run.
+        time.sleep(limit)
         print("error: timeout", file=sys.stderr)
-        if batch: continue
         sys.exit(1)
     if "CRASH" in data:
         print("error: boom", file=sys.stderr)
@@ -283,6 +287,23 @@ class StageTests(unittest.TestCase):
         by_path = {r.relative_path: r for r in result.results}
         self.assertTrue(by_path["a_slow.bin"].timed_out)
         self.assertTrue(by_path["b.bin"].complete)
+
+    def test_batch_limits(self) -> None:
+        packs = install(self.root / "packs", externals=[])
+        entries = sample(self.scan_root, {"a.bin": b"x", "b.bin": b"y", "c.bin": b"z"})
+        self.run_stage(entries, packs, file_timeout_seconds=7)
+        # One yr run for three files gets the time of three files.
+        self.assertEqual((self.root / "yr.limits").read_text().split(), ["21"])
+
+    def test_big_files_split_batches(self) -> None:
+        from static_triage import yara_scan
+
+        packs = install(self.root / "packs", externals=[])
+        entries = sample(self.scan_root, {f"{n}.bin": n.encode() * 600 for n in "abcde"})
+        with patch.object(yara_scan, "BATCH_MAX_BYTES", 1300):
+            result = self.run_stage(entries, packs)
+        self.assertEqual(result.status, "completed")
+        self.assertEqual(self.scans_logged(), ["batch", "batch", "batch"])  # 2 + 2 + 1
 
     def test_externals_mean_one_process_per_file(self) -> None:
         packs = install(self.root / "packs")  # declares the filename external

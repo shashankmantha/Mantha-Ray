@@ -46,6 +46,9 @@ PROGRESS_INTERVAL_SECONDS = 5.0
 # bundle, so when no rule reads the per-file externals, one yr process scans
 # a list of files instead of one process per file.
 BATCH_FILES = 256
+# yr's --timeout covers its whole run, not each file, so batches are also
+# capped by size; a batch that runs out of time is rescanned file by file.
+BATCH_MAX_BYTES = 256 * 1024**2
 BATCH_MAX_OUTPUT_BYTES = 20_000_000
 
 YR_ENV = {
@@ -590,7 +593,9 @@ def scan_batch(
     if not targets:
         return results
 
-    per_file_timeout = max(1, int(min(time_left, file_timeout_seconds)))
+    # One limit for the whole yr run (yr counts --timeout from its start):
+    # the per-file limit for every file in the batch, within the stage's time.
+    batch_limit = max(1.0, min(time_left, file_timeout_seconds * len(targets)))
     descriptor, list_name = tempfile.mkstemp(prefix="scan-list-", suffix=".txt",
                                              dir=rules.compiled.parent)
     list_path = Path(list_name)
@@ -605,13 +610,12 @@ def scan_batch(
                 "--output-format", "ndjson",
                 "--print-namespace", "--print-meta", "--print-tags",
                 "--disable-console-logs",
-                "--timeout", str(per_file_timeout),
+                "--timeout", str(max(1, int(batch_limit))),
                 "--max-matches-per-pattern", str(MAX_MATCHES_PER_PATTERN),
                 "--threads", "1",
                 *_define_arguments({}),
             ],
-            # Each file has its own limit inside yr; this bounds the whole batch.
-            timeout_seconds=max(1.0, min(time_left, file_timeout_seconds * len(targets) + 10)),
+            timeout_seconds=batch_limit + 10,
             max_output_bytes=BATCH_MAX_OUTPUT_BYTES,
             env=YR_ENV,
             stoppable=True,
@@ -691,14 +695,21 @@ def _work_units(groups: tuple[AnalysisGroup, ...], rules: LoadedRules) -> list[l
         return [[group] for group in groups]
     units: list[list[AnalysisGroup]] = []
     batch: list[AnalysisGroup] = []
+    batch_bytes = 0
     for group in groups:
+        size = group.representative.size_bytes
+        size = size if isinstance(size, int) and not isinstance(size, bool) else 0
         if not _can_batch(group):
             units.append([group])
             continue
+        if batch and batch_bytes + size > BATCH_MAX_BYTES:
+            units.append(batch)
+            batch, batch_bytes = [], 0
         batch.append(group)
+        batch_bytes += size
         if len(batch) == BATCH_FILES:
             units.append(batch)
-            batch = []
+            batch, batch_bytes = [], 0
     if batch:
         units.append(batch)
     return units

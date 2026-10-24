@@ -240,6 +240,8 @@ def run_groups(
                     not out_of_time
                     and len(pending) < workers
                     and next_index < total
+                    # A retry runs alone: nothing new starts beside it.
+                    and not any(job.alone for job in pending.values())
                 ):
                     if stop_request.requested():
                         out_of_time = True

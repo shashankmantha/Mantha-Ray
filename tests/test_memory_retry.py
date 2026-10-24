@@ -138,7 +138,13 @@ class MemoryRetryTests(unittest.TestCase):
                 order.append(f"{name}#{call}")
                 if name in ("a.dll", "b.dll") and call == 1:
                     both_running.wait()
-                    return "killed" if name == "b.dll" else "ok"
+                    if name == "b.dll":
+                        return "killed"
+                    # a.dll finishes after b.dll's kill has been seen, as in
+                    # the real case this tests; otherwise c.dll may already
+                    # have started before anything was known about b.dll.
+                    time.sleep(0.3)
+                    return "ok"
                 return "ok"
             finally:
                 tracker.leave()
