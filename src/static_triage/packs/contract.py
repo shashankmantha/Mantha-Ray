@@ -164,10 +164,44 @@ def declared_rules(text: str) -> dict[str, bool]:
 
 
 def _strip_comments(text: str) -> str:
-    # Enough to keep commented-out rules from counting; strings that contain
-    # comment markers only affect this check, never what gets compiled.
-    text = re.sub(r"/\*.*?\*/", " ", text, flags=re.S)
-    return re.sub(r"//[^\n]*", "", text)
+    """Blank out comments and the contents of text strings and regular
+    expressions, keeping every newline, so that only real code is left.
+
+    Regular expressions can't do this safely: a string such as
+    "Accept: */*" or "http://" contains comment markers, and treating
+    them as comments hides every rule up to the next "*/".
+    """
+
+    out = list(text)
+    i, n = 0, len(text)
+
+    def blank(start: int, end: int) -> None:
+        for j in range(start, end):
+            if out[j] != "\n":
+                out[j] = " "
+
+    while i < n:
+        c = text[i]
+        nxt = text[i + 1] if i + 1 < n else ""
+        if c == "/" and nxt == "/":  # line comment
+            end = text.find("\n", i)
+            end = n if end == -1 else end
+            blank(i, end)
+            i = end
+        elif c == "/" and nxt == "*":  # block comment
+            end = text.find("*/", i + 2)
+            end = n if end == -1 else end + 2
+            blank(i, end)
+            i = end
+        elif c in "\"/":  # text string, or regular expression
+            j = i + 1
+            while j < n and text[j] != c and text[j] != "\n":
+                j += 2 if text[j] == "\\" else 1
+            blank(i + 1, min(j, n))  # keep the delimiters
+            i = j + 1
+        else:
+            i += 1
+    return "".join(out)
 
 
 def validate_pack(pack_dir: Path, *, local: bool = False) -> PackInfo:

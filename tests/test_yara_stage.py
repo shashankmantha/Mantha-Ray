@@ -35,7 +35,7 @@ from test_packs import write_bundle
 # match for every "MATCH:<namespace>:<rule>" marker in the scanned file and
 # echoes the filename external, so the orchestration can be tested anywhere.
 FAKE_YR = r'''#!PYTHON
-import json, sys, time
+import json, os, sys, time
 args = sys.argv[1:]
 if args[0] == "--version":
     print("yara-x-cli fake"); sys.exit(0)
@@ -60,20 +60,33 @@ if args[0] == "compile":
             print("error: syntax error in " + source, file=sys.stderr); sys.exit(1)
     json.dump(sources, open(output, "w")); sys.exit(0)
 target = [x for x in rest[1:] if isinstance(x, str) and not x.startswith("--")][-1]
-data = open(target, "rb").read().decode("latin-1")
-if "SLEEP" in data:
-    time.sleep(int(dict(x for x in rest if isinstance(x, tuple))["--timeout"]))
-    print("error: timeout", file=sys.stderr); sys.exit(1)
-if "CRASH" in data:
-    print("error: boom", file=sys.stderr); sys.exit(2)
-rules = []
-for part in data.split("MATCH:")[1:]:
-    ns, rule = part.split(":")[:2]
-    rule = rule.split()[0]
-    rules.append({"identifier": rule, "namespace": ns,
-                  "meta": [["description", "fake " + rule], ["filename", defines["filename"]]],
-                  "tags": ["t"]})
-print(json.dumps({"path": target, "rules": rules}))
+# yr runs with a clean environment, so the log sits next to this script.
+open(os.path.join(os.path.dirname(sys.argv[0]), "yr.log"), "a").write(
+    ("batch" if "--scan-list" in rest else "file") + "\n")
+# Like yr: with --scan-list, a per-file problem goes to stderr and the scan
+# carries on; only matching files are printed.
+batch = "--scan-list" in rest
+targets = open(target).read().splitlines() if batch else [target]
+for target in targets:
+    data = open(target, "rb").read().decode("latin-1")
+    if "SLEEP" in data:
+        time.sleep(int(dict(x for x in rest if isinstance(x, tuple))["--timeout"]))
+        print("error: timeout", file=sys.stderr)
+        if batch: continue
+        sys.exit(1)
+    if "CRASH" in data:
+        print("error: boom", file=sys.stderr)
+        if batch: continue
+        sys.exit(2)
+    rules = []
+    for part in data.split("MATCH:")[1:]:
+        ns, rule = part.split(":")[:2]
+        rule = rule.split()[0]
+        rules.append({"identifier": rule, "namespace": ns,
+                      "meta": [["description", "fake " + rule], ["filename", defines["filename"]]],
+                      "tags": ["t"]})
+    if rules or not batch:
+        print(json.dumps({"path": target, "rules": rules}))
 '''
 
 
@@ -227,6 +240,56 @@ class StageTests(unittest.TestCase):
         self.assertEqual(result.status, "error")  # compile is stopped too
         self.assertIn("stopped", result.error)
 
+    def scans_logged(self) -> list[str]:
+        try:
+            return (self.root / "yr.log").read_text().splitlines()
+        except FileNotFoundError:
+            return []
+
+    def test_one_yr_process_scans_many_files_without_externals(self) -> None:
+        packs = install(self.root / "packs", externals=[])
+        files = {f"dir/f{i:03}.bin": f"file {i}".encode() for i in range(300)}
+        files["dir/hit.exe"] = b"MZ MATCH:core-threats.tests:MAL_Test_Stealer "
+        files['odd "name" dir/x.dll'] = b"MATCH:core-threats.tests:SUSP_Test_Name "
+        entries = sample(self.scan_root, files)
+        result = self.run_stage(entries, packs, workers=2)
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(self.scans_logged(), ["batch", "batch"])  # 302 files, 256 per batch
+        self.assertEqual(result.scanned_files, 302)
+        found = {(r.relative_path, m.rule) for r in result.results for m in r.matches}
+        self.assertEqual(found, {("dir/hit.exe", "MAL_Test_Stealer"),
+                                 ('odd "name" dir/x.dll', "SUSP_Test_Name")})
+        self.assertTrue(all(r.complete for r in result.results))
+
+    def test_batch_problem_rescans_that_batch_file_by_file(self) -> None:
+        packs = install(self.root / "packs", externals=[])
+        entries = sample(self.scan_root, {
+            "a.bin": b"CRASH", "b.bin": b"MATCH:core-threats.tests:MAL_Test_Stealer ", "c.bin": b"x",
+        })
+        result = self.run_stage(entries, packs)
+        self.assertEqual(self.scans_logged(), ["batch", "file", "file", "file"])
+        self.assertEqual(result.status, "incomplete")
+        self.assertEqual(result.failed_files, 1)
+        by_path = {r.relative_path: r for r in result.results}
+        self.assertEqual(by_path["a.bin"].error, "yr failed: error: boom")
+        self.assertEqual([m.rule for m in by_path["b.bin"].matches], ["MAL_Test_Stealer"])
+        self.assertTrue(by_path["c.bin"].complete)
+
+    def test_batch_timeout_is_reported_per_file(self) -> None:
+        packs = install(self.root / "packs", externals=[])
+        entries = sample(self.scan_root, {"a_slow.bin": b"SLEEP", "b.bin": b"x"})
+        result = self.run_stage(entries, packs, file_timeout_seconds=1, total_timeout_seconds=20)
+        self.assertEqual(result.status, "incomplete")
+        by_path = {r.relative_path: r for r in result.results}
+        self.assertTrue(by_path["a_slow.bin"].timed_out)
+        self.assertTrue(by_path["b.bin"].complete)
+
+    def test_externals_mean_one_process_per_file(self) -> None:
+        packs = install(self.root / "packs")  # declares the filename external
+        entries = sample(self.scan_root, {"a.bin": b"x", "b.bin": b"y"})
+        self.run_stage(entries, packs)
+        self.assertEqual(self.scans_logged(), ["file", "file"])
+
     def test_externals_for(self) -> None:
         self.assertEqual(
             externals_for("Game/Bin/Steam_API64.DLL"),
@@ -341,6 +404,33 @@ class RealYaraTests(unittest.TestCase):
         self.assertEqual(found, {
             ("cheat.exe", "MAL_Test_Stealer", "threat"),
             ("steam_api64.dll", "SUSP_Test_Name", "suspicious"),
+        })
+
+    def test_real_batch_scan_without_externals(self) -> None:
+        rules = (
+            'rule MAL_Test_Stealer { strings: $a = "loginusers.vdf" condition: $a }\n'
+            'rule SUSP_Test_Name { strings: $a = "Accept: */*" condition: $a }\n'
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            packs = install(root / "packs", rules=rules, externals=[])
+            scan_root = root / "sample"
+            scan_root.mkdir()
+            files = {f"clean/{i}.txt": f"nothing {i}".encode() for i in range(40)}
+            files.update({
+                'odd "name"\\ dir/cheat.exe': b"loginusers.vdf",
+                "web/request.txt": b"GET / HTTP/1.1\r\nAccept: */*\r\n",
+            })
+            entries = sample(scan_root, files)
+            result = run_yara_stage(
+                entries, scan_root, executable=real_yr(), app_version="0.1.0", packs_root=packs,
+            )
+        self.assertEqual(result.status, "completed", result.error)
+        self.assertEqual(result.scanned_files, 42)
+        found = {(r.relative_path, m.rule, m.severity) for r in result.results for m in r.matches}
+        self.assertEqual(found, {
+            ('odd "name"\\ dir/cheat.exe', "MAL_Test_Stealer", "threat"),
+            ("web/request.txt", "SUSP_Test_Name", "suspicious"),
         })
 
 

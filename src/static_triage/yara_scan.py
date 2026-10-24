@@ -42,6 +42,11 @@ MAX_MATCHES_PER_PATTERN = 1000
 MAX_REPORTED_FILES = 2000
 MAX_DESCRIPTION_CHARS = 300
 PROGRESS_INTERVAL_SECONDS = 5.0
+# Loading the compiled rules takes yr about a third of a second for a full
+# bundle, so when no rule reads the per-file externals, one yr process scans
+# a list of files instead of one process per file.
+BATCH_FILES = 256
+BATCH_MAX_OUTPUT_BYTES = 20_000_000
 
 YR_ENV = {
     "PATH": "/usr/local/bin:/usr/bin:/bin",
@@ -546,6 +551,159 @@ def scan_file(
     )
 
 
+def _can_batch(group: AnalysisGroup) -> bool:
+    # A scan list has one path per line, so names with line breaks can't go in it.
+    path = group.representative.relative_path
+    return "\n" not in path and "\r" not in path
+
+
+def scan_batch(
+    groups: list[AnalysisGroup],
+    scan_root: Path,
+    rules: LoadedRules,
+    *,
+    executable: str,
+    time_left: float,
+    file_timeout_seconds: float = YARA_FILE_TIMEOUT_SECONDS,
+) -> list[YaraFileResult]:
+    """Scan many files with one yr process (only for rules that read no externals).
+
+    yr prints a line only for files that match and reports per-file problems
+    on stderr. If anything at all goes wrong, the batch is scanned again file
+    by file, so every file still gets its own exact result. `time_left` is
+    what remains of the stage's total time.
+    """
+
+    started = time.monotonic()
+
+    results: list[YaraFileResult] = []
+    targets: dict[str, AnalysisGroup] = {}
+    for group in groups:
+        target = scan_root / group.representative.relative_path
+        if target.is_symlink() or not target.is_file():
+            results.append(YaraFileResult(
+                group.representative.relative_path, group.reused_paths, (),
+                False, False, False, "not a regular file", 0.0,
+            ))
+        else:
+            targets[str(target)] = group
+    if not targets:
+        return results
+
+    per_file_timeout = max(1, int(min(time_left, file_timeout_seconds)))
+    descriptor, list_name = tempfile.mkstemp(prefix="scan-list-", suffix=".txt",
+                                             dir=rules.compiled.parent)
+    list_path = Path(list_name)
+    try:
+        with open(descriptor, "w", encoding="utf-8", errors="surrogateescape") as handle:
+            handle.write("".join(f"{path}\n" for path in targets))
+        execution = run_command(
+            [
+                executable, "scan",
+                "--compiled-rules", str(rules.compiled),
+                str(list_path), "--scan-list",
+                "--output-format", "ndjson",
+                "--print-namespace", "--print-meta", "--print-tags",
+                "--disable-console-logs",
+                "--timeout", str(per_file_timeout),
+                "--max-matches-per-pattern", str(MAX_MATCHES_PER_PATTERN),
+                "--threads", "1",
+                *_define_arguments({}),
+            ],
+            # Each file has its own limit inside yr; this bounds the whole batch.
+            timeout_seconds=max(1.0, min(time_left, file_timeout_seconds * len(targets) + 10)),
+            max_output_bytes=BATCH_MAX_OUTPUT_BYTES,
+            env=YR_ENV,
+            stoppable=True,
+        )
+    finally:
+        list_path.unlink(missing_ok=True)
+
+    if execution.stopped:
+        return results + [
+            YaraFileResult(g.representative.relative_path, g.reused_paths, (),
+                           False, False, True, stop_request.STOPPED_MESSAGE, 0.0)
+            for g in targets.values()
+        ]
+
+    lines: dict[str, list[str]] = {}
+    unknown_output = False
+    for line in execution.stdout.splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            path = json.loads(line).get("path")
+        except (ValueError, AttributeError):
+            unknown_output = True
+            continue
+        if path in targets:
+            lines.setdefault(path, []).append(line)
+        else:
+            unknown_output = True
+
+    if (
+        execution.return_code != 0
+        or execution.timed_out
+        or execution.output_truncated
+        or execution.stderr.strip()
+        or unknown_output
+    ):
+        # Something went wrong for at least one file, and yr doesn't say
+        # which one reliably: scan this batch again one file at a time,
+        # within the stage's remaining time.
+        deadline = started + time_left
+        for group in targets.values():
+            remaining = deadline - time.monotonic()
+            if remaining < 1 or stop_request.requested():
+                stopped = stop_request.requested()
+                results.append(YaraFileResult(
+                    group.representative.relative_path, group.reused_paths, (),
+                    False, not stopped, stopped,
+                    stop_request.STOPPED_MESSAGE if stopped else "timed out", 0.0,
+                ))
+                continue
+            results.append(scan_file(
+                group, scan_root, rules, executable=executable,
+                timeout_seconds=min(remaining, file_timeout_seconds),
+            ))
+        return results
+
+    each = execution.duration_seconds / len(targets)
+    for path, group in targets.items():
+        matches, truncated = _parse_matches("\n".join(lines.get(path, [])), rules)
+        results.append(YaraFileResult(
+            relative_path=group.representative.relative_path,
+            reused_for=group.reused_paths,
+            matches=matches,
+            complete=True,
+            timed_out=False,
+            stopped_by_user=False,
+            error=None,
+            duration_seconds=each,
+            matches_truncated=truncated,
+        ))
+    return results
+
+
+def _work_units(groups: tuple[AnalysisGroup, ...], rules: LoadedRules) -> list[list[AnalysisGroup]]:
+    if rules.uses_externals:
+        return [[group] for group in groups]
+    units: list[list[AnalysisGroup]] = []
+    batch: list[AnalysisGroup] = []
+    for group in groups:
+        if not _can_batch(group):
+            units.append([group])
+            continue
+        batch.append(group)
+        if len(batch) == BATCH_FILES:
+            units.append(batch)
+            batch = []
+    if batch:
+        units.append(batch)
+    return units
+
+
 def eligible_entries(entries: list[InventoryEntry]) -> list[InventoryEntry]:
     return [
         entry
@@ -689,12 +847,23 @@ def _scan_groups(
     say: ProgressMessage,
 ) -> None:
     deadline = started + total_timeout_seconds
-    pending = list(groups)
+    pending = _work_units(groups, rules)
     pending.reverse()  # pop() from the end keeps path order
-    running: dict[Future[YaraFileResult], AnalysisGroup] = {}
+    running: dict[Future[list[YaraFileResult]], list[AnalysisGroup]] = {}
     lock = threading.Lock()
     last_progress = clock()
     total = len(groups)
+
+    def scan_unit(unit: list[AnalysisGroup], remaining: float) -> list[YaraFileResult]:
+        if rules.uses_externals or not _can_batch(unit[0]):
+            return [scan_file(
+                unit[0], scan_root, rules, executable=executable,
+                timeout_seconds=min(file_timeout_seconds, remaining),
+            )]
+        return scan_batch(
+            unit, scan_root, rules, executable=executable,
+            time_left=remaining, file_timeout_seconds=file_timeout_seconds,
+        )
 
     with ThreadPoolExecutor(max_workers=batch.workers) as pool:
         while pending or running:
@@ -702,36 +871,35 @@ def _scan_groups(
                 remaining = deadline - clock()
                 if stop_request.requested() or remaining < 1:
                     break
-                group = pending.pop()
-                future = pool.submit(
-                    scan_file, group, scan_root, rules,
-                    executable=executable,
-                    timeout_seconds=min(file_timeout_seconds, remaining),
-                )
-                running[future] = group
+                unit = pending.pop()
+                running[pool.submit(scan_unit, unit, remaining)] = unit
             if not running:
                 break
             done, _ = wait(running, timeout=1.0, return_when=FIRST_COMPLETED)
             for future in done:
-                group = running.pop(future)
+                unit = running.pop(future)
                 try:
-                    result = future.result()
+                    unit_results = future.result()
                 except OSError as exc:
-                    result = YaraFileResult(
-                        group.representative.relative_path, group.reused_paths, (),
-                        False, False, False, f"yr could not start: {type(exc).__name__}", 0.0,
-                    )
-                with lock:
-                    batch.results.append(result)
-                    batch.scanned_files += 1
-                    if not result.complete:
-                        if result.stopped_by_user:
-                            batch.stopped_files += 1
-                        elif result.timed_out:
-                            batch.timed_out_files += 1
-                        batch.failed_files += 1
-                if result.matches:
-                    say(_match_message(result))
+                    unit_results = [
+                        YaraFileResult(
+                            group.representative.relative_path, group.reused_paths, (),
+                            False, False, False, f"yr could not start: {type(exc).__name__}", 0.0,
+                        )
+                        for group in unit
+                    ]
+                for result in unit_results:
+                    with lock:
+                        batch.results.append(result)
+                        batch.scanned_files += 1
+                        if not result.complete:
+                            if result.stopped_by_user:
+                                batch.stopped_files += 1
+                            elif result.timed_out:
+                                batch.timed_out_files += 1
+                            batch.failed_files += 1
+                    if result.matches:
+                        say(_match_message(result))
             now = clock()
             if now - last_progress >= PROGRESS_INTERVAL_SECONDS and (pending or running):
                 last_progress = now
@@ -741,7 +909,7 @@ def _scan_groups(
                 )
 
     batch.skipped_due_to_timeout = sum(
-        len(group.entries) for group in pending
+        len(group.entries) for unit in pending for group in unit
     )
     batch.results.sort(key=lambda r: r.relative_path)
 

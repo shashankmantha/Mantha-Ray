@@ -126,6 +126,25 @@ class ContractTests(unittest.TestCase):
         )
         self.assertEqual(core.severity("examples__game_threats_yar", "Unlisted"), "info")
 
+    def test_comment_markers_inside_strings_and_regexes(self) -> None:
+        # Real YARA Forge rules have strings like "Accept: */*" and "http://".
+        # Treating those as comments hid most of a real bundle's rules.
+        text = (
+            'rule First { strings: $a = "Accept: text/html, */*" condition: $a }\n'
+            'rule Second { strings: $u = "http://example.org/a" condition: $u }\n'
+            'rule Third { strings: $r = /GET \\/[a-z]+\\/\\*/ condition: $r }\n'
+            'rule Fourth { strings: $q = "say \\"/*\\" here" condition: $q }\n'
+            '/* rule Commented { condition: true } */\n'
+            '// rule AlsoCommented { condition: true }\n'
+            'private rule Helper { condition: true }\n'
+            'rule Last { strings: $s = "end */" condition: $s and Helper }\n'
+        )
+        self.assertEqual(
+            declared_rules(text),
+            {"First": True, "Second": True, "Third": True, "Fourth": True,
+             "Helper": False, "Last": True},
+        )
+
     def test_versions_compare_as_numbers(self) -> None:
         self.assertGreater(bundle_version_key("2026.10.22.12"), bundle_version_key("2026.10.22.2"))
         with self.assertRaises(ContractError):
