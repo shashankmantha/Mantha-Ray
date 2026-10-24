@@ -537,9 +537,17 @@ def scan_file(
     timed_out = execution.timed_out
     if execution.stopped:
         error = stop_request.STOPPED_MESSAGE
-    elif execution.return_code != 0:
+    elif execution.return_code != 0 or execution.stderr.strip():
+        # yr exits with 0 even when the file timed out or couldn't be read;
+        # it only says so on stderr. Without this, those files would count
+        # as scanned with no matches.
         detail = _first_error(execution)
-        timed_out = timed_out or "timeout" in detail.lower()
+        # yr reports `error: scanning "<path>": timeout`. Check the end of each
+        # full stderr line, not the shortened detail: a name such as
+        # timeout_helper.dll mustn't count, and a long path mustn't hide it.
+        timed_out = timed_out or any(
+            line.rstrip().endswith(": timeout") for line in execution.stderr.splitlines()
+        )
         error = "timed out" if timed_out else f"yr failed: {detail}"
     return YaraFileResult(
         relative_path=entry.relative_path,

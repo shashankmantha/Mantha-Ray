@@ -72,16 +72,16 @@ limit = int(dict(x for x in rest if isinstance(x, tuple))["--timeout"])
 open(os.path.join(os.path.dirname(sys.argv[0]), "yr.limits"), "a").write(f"{limit}\n")
 for target in targets:
     data = open(target, "rb").read().decode("latin-1")
+    # Like yr, problems with a file only go to stderr: the exit code stays 0.
     if "SLEEP" in data:
         # Like yr: --timeout counts from the start of the whole run, and
         # running out of time ends the run.
         time.sleep(limit)
-        print("error: timeout", file=sys.stderr)
-        sys.exit(1)
+        print(f'error: scanning "{target}": timeout', file=sys.stderr)
+        sys.exit(0)
     if "CRASH" in data:
-        print("error: boom", file=sys.stderr)
-        if batch: continue
-        sys.exit(2)
+        print(f"error: can't open `{target}`: boom", file=sys.stderr)  # like yr
+        continue
     rules = []
     for part in data.split("MATCH:")[1:]:
         ns, rule = part.split(":")[:2]
@@ -275,7 +275,7 @@ class StageTests(unittest.TestCase):
         self.assertEqual(result.status, "incomplete")
         self.assertEqual(result.failed_files, 1)
         by_path = {r.relative_path: r for r in result.results}
-        self.assertEqual(by_path["a.bin"].error, "yr failed: error: boom")
+        self.assertIn(": boom", by_path["a.bin"].error)
         self.assertEqual([m.rule for m in by_path["b.bin"].matches], ["MAL_Test_Stealer"])
         self.assertTrue(by_path["c.bin"].complete)
 
@@ -310,6 +310,19 @@ class StageTests(unittest.TestCase):
         entries = sample(self.scan_root, {"a.bin": b"x", "b.bin": b"y"})
         self.run_stage(entries, packs)
         self.assertEqual(self.scans_logged(), ["file", "file"])
+
+    def test_timeout_label_comes_from_yr_message_not_file_name(self) -> None:
+        packs = install(self.root / "packs")
+        long_dir = "d" * 200 + "/" + "e" * 200
+        entries = sample(self.scan_root, {
+            "timeout_helper.dll": b"CRASH",
+            f"{long_dir}/slow.bin": b"SLEEP",
+        })
+        result = self.run_stage(entries, packs, file_timeout_seconds=1)
+        by_path = {r.relative_path: r for r in result.results}
+        self.assertFalse(by_path["timeout_helper.dll"].timed_out)
+        self.assertTrue(by_path["timeout_helper.dll"].error.startswith("yr failed: error: can't open"))
+        self.assertTrue(by_path[f"{long_dir}/slow.bin"].timed_out)  # message longer than 300
 
     def test_externals_for(self) -> None:
         self.assertEqual(
