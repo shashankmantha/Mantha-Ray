@@ -775,11 +775,12 @@ def run_capa_batch(
 
     if skipped_due_to_timeout:
         issues.append(
-            f"{skipped_due_to_timeout} selected files "
+            f"{skipped_due_to_timeout} selected "
+            + ("file was" if skipped_due_to_timeout == 1 else "files were")
             + (
-                "were not analyzed because " + stop_request.STOPPED_MESSAGE
+                " not analyzed because " + stop_request.STOPPED_MESSAGE
                 if stop_request.requested()
-                else "were not analyzed before the capa total-time limit"
+                else " not analyzed before the capa total-time limit"
             )
         )
 
@@ -790,13 +791,17 @@ def run_capa_batch(
 
     if failed_files:
         issues.append(
-            f"{failed_files} capa analyses were incomplete"
+            f"{failed_files} capa "
+            + ("analysis was" if failed_files == 1 else "analyses were")
+            + " incomplete"
         )
 
     too_big = sum(result.needs_more_memory for result in results)
     if too_big:
         issues.append(
-            f"{too_big} capa analyses ran out of memory even when "
+            f"{too_big} capa "
+            + ("analysis" if too_big == 1 else "analyses")
+            + " ran out of memory even when "
             "run alone; this profile needs more memory for them"
         )
 

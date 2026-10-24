@@ -63,7 +63,7 @@ def _bounded_text(
     if len(text) <= max_chars:
         return text
 
-    return text[: max_chars - 1] + "â€¦"
+    return text[: max_chars - 1] + "…"
 
 
 def _markdown_code(value: object) -> str:
@@ -805,7 +805,7 @@ def _render_markdown(
 
     if clamav.get("error"):
         lines.append(
-            "- Error: "
+            "- Issues: "
             + _markdown_code(clamav["error"])
         )
 
@@ -828,7 +828,7 @@ def _render_markdown(
                 + _markdown_code(
                     finding["relative_path"]
                 )
-                + " â€” "
+                + " — "
                 + _markdown_code(
                     finding["signature"]
                 )
@@ -969,7 +969,7 @@ def _render_markdown(
 
     if capa.get("error"):
         lines.append(
-            "- Error: "
+            "- Issues: "
             + _markdown_code(capa["error"])
         )
 
@@ -1094,11 +1094,11 @@ def _render_markdown(
                         + _markdown_code(
                             result["relative_path"]
                         )
-                        + " â€” "
+                        + " — "
                         + _markdown_code(
                             capability["name"]
                         )
-                        + f" â€” risk {capability_score} "
+                        + f" — risk {capability_score} "
                         + f"({capability_level})"
                     ),
                     (
@@ -1310,7 +1310,7 @@ def _render_markdown(
 
     if floss.get("error"):
         lines.append(
-            "- Error: "
+            "- Issues: "
             + _markdown_code(floss["error"])
         )
 
@@ -1368,11 +1368,11 @@ def _render_markdown(
                 + _markdown_code(
                     result["relative_path"]
                 )
-                + " â€” "
+                + " — "
                 + _markdown_code(
                     item["value"]
                 )
-                + " â€” "
+                + " — "
                 + _markdown_code(
                     "; ".join(details)
                 )
@@ -1541,7 +1541,7 @@ def _render_markdown(
         )
 
         lines.append(
-            f"- {safe_path} â€” {evidence}"
+            f"- {safe_path} — {evidence}"
         )
 
     if len(review_items) > 100:
