@@ -11,6 +11,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import BinaryIO, Mapping, Sequence
 
+from . import stop_request
+
 
 @dataclass(frozen=True, slots=True)
 class CommandResult:
@@ -25,6 +27,8 @@ class CommandResult:
     duration_seconds: float
     # Highest resident memory seen for the process, if it could be read.
     peak_memory_mib: float | None = None
+    # Ended (or never started) because the user stopped the scan.
+    stopped: bool = False
 
 
 class _BoundedCapture:
@@ -103,6 +107,8 @@ def _terminate_process_group(
 
 
 PEAK_SAMPLE_SECONDS = 1.0
+# How often a stoppable command checks for a stop request.
+STOP_POLL_SECONDS = 0.5
 
 
 def _read_peak_rss_kib(pid: int) -> int | None:
@@ -138,6 +144,7 @@ def run_command(
     max_output_bytes: int = 1_000_000,
     cwd: Path | None = None,
     env: Mapping[str, str] | None = None,
+    stoppable: bool = False,
 ) -> CommandResult:
     """Run one command without a shell and bound its resources."""
 
@@ -151,6 +158,18 @@ def run_command(
         raise ValueError("max_output_bytes must be positive")
 
     normalized_command = tuple(str(item) for item in command)
+
+    if stoppable and stop_request.requested():
+        return CommandResult(
+            command=normalized_command,
+            return_code=-1,
+            stdout="",
+            stderr="",
+            timed_out=False,
+            output_truncated=False,
+            duration_seconds=0.0,
+            stopped=True,
+        )
 
     started = time.monotonic()
 
@@ -197,12 +216,25 @@ def run_command(
     peak_thread.start()
 
     timed_out = False
+    stopped = False
+    deadline = started + timeout_seconds
 
-    try:
-        process.wait(timeout=timeout_seconds)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _terminate_process_group(process)
+    while True:
+        left = deadline - time.monotonic()
+        if left <= 0:
+            timed_out = True
+            _terminate_process_group(process)
+            break
+        try:
+            process.wait(
+                timeout=min(left, STOP_POLL_SECONDS) if stoppable else left
+            )
+            break
+        except subprocess.TimeoutExpired:
+            if stoppable and stop_request.requested():
+                stopped = True
+                _terminate_process_group(process)
+                break
 
     stop_watching.set()
     peak_thread.join()
@@ -229,4 +261,5 @@ def run_command(
         peak_memory_mib=(
             round(peak[0] / 1024, 1) if peak[0] else None
         ),
+        stopped=stopped,
     )

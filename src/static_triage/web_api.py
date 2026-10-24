@@ -358,6 +358,23 @@ def create_app(
                 detail=str(exc),
             ) from exc
 
+    @app.post("/api/scans/{scan_id}/stop")
+    async def stop_scan(
+        scan_id: str,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(
+                service.stop,
+                scan_id,
+            )
+
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
     @app.delete("/api/scans/{scan_id}")
     async def cancel_scan(
         scan_id: str,

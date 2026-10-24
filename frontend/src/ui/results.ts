@@ -10,7 +10,7 @@ import {
 import type { JsonObject, ScanState } from "../types";
 import { renderArtifactTree } from "./artifactTree";
 import {
-  cancelButton,
+  stopButton,
   element,
   openCaseButton,
   progressWrap,
@@ -49,10 +49,18 @@ export function renderSelectedSession(): void {
     `verdict verdict-${statusKind(session)}`;
   const terminal = isTerminalState(session.state.state);
   progressWrap.classList.toggle("d-none", terminal);
-  cancelButton.classList.toggle(
+  stopButton.classList.toggle(
     "d-none",
     session.id !== getActiveScanId(),
   );
+  const winding = session.state.state === "stopping"
+    || session.state.state === "cancelling";
+  stopButton.disabled = winding;
+  stopButton.textContent = session.state.state === "stopping"
+    ? "Stopping and saving the report\u2026"
+    : session.state.state === "cancelling"
+      ? "Cancelling\u2026"
+      : "Stop scan\u2026";
   if (!terminal) {
     resultsSection.classList.add("d-none");
     renderProgress(session.state);

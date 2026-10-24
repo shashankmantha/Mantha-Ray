@@ -435,6 +435,19 @@ docker run --rm \
   --version
 ```
 
+## Stopping a scan
+
+In the window, **Stop scan…** asks for confirmation; hold **Stop and save report** for two seconds. The analyses in progress are ended and a report of the work finished so far is saved (files not analyzed yet are listed as not reached). **Discard the scan instead**, also hold-to-confirm, ends it at once and saves nothing.
+
+Without the window (for example after it was closed), from the repository root:
+
+```bash
+./scripts/stop-scan.sh            # stop and save a report; asks you to type "stop"
+./scripts/stop-scan.sh --discard  # end it without a report; asks you to type "discard"
+```
+
+Then `./scripts/summary.sh` shows the saved case.
+
 ## Development
 
 ### Run all the tests

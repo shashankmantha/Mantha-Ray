@@ -91,11 +91,27 @@ export interface ScanResult {
   artifacts?: ArtifactRecord[];
 }
 
+export interface QueueItem {
+  position: number;
+  path: string;
+  size: string;
+  copies: number;
+  mode: string;
+  status: string;
+  detail: string;
+}
+
+export interface StageQueue {
+  total: number;
+  items: Array<QueueItem | null>;
+}
+
 export interface ScanState {
   scan_id: string;
   state: string;
   message: string;
   events: ScanEvent[];
+  queues?: Record<string, StageQueue>;
   stages?: Partial<Record<StageName, StageStatus>>;
   result: ScanResult | null;
   error: string | null;

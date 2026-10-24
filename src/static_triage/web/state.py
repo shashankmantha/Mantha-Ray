@@ -11,6 +11,7 @@ ACTIVE_STATES = {
     "queued",
     "preflight",
     "running",
+    "stopping",
     "cancelling",
 }
 TERMINAL_STATES = {
@@ -106,6 +107,10 @@ class WebScanState:
     updated_at: str = field(default_factory=now)
     events: list[dict[str, str]] = field(
         default_factory=list
+    )
+    # Planned file order per analyzer stage, with each file's status.
+    queues: dict[str, dict[str, Any]] = field(
+        default_factory=dict
     )
     stages: dict[str, str] = field(
         default_factory=waiting_stages

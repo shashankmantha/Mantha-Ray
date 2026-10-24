@@ -34,7 +34,7 @@ export interface ScanControllerUi {
   renderSessionList(): void;
   renderSelectedSession(): void;
   selectSession(id: string): Promise<void>;
-  /** Disable the cancel button while a cancel request is in flight. */
+  /** Disable the stop button while a stop or cancel request is in flight. */
   setCancelPending(pending: boolean): void;
   /** Resource settings for the scan, or null if they are invalid. */
   resourceSelection(): ResourceSelection | null;
@@ -43,6 +43,8 @@ export interface ScanControllerUi {
 export interface ScanController {
   startScan(): Promise<void>;
   cancelScan(): Promise<void>;
+  /** Stop the active scan and keep a report of the finished work. */
+  stopScan(): Promise<void>;
   isServiceReady(): boolean;
   setServiceReady(ready: boolean): void;
 }
@@ -107,6 +109,27 @@ export function createScanController(
       ui.showError(
         error instanceof Error ? error.message : String(error),
       );
+    }
+  }
+
+  async function stopScan(): Promise<void> {
+    const activeScanId = getActiveScanId();
+    if (!activeScanId) {
+      return;
+    }
+    ui.setCancelPending(true);
+    try {
+      const state = await api<ScanState>(
+        `/api/scans/${activeScanId}/stop`,
+        { method: "POST" },
+      );
+      updateSession(state);
+    } catch (error) {
+      ui.showError(
+        error instanceof Error ? error.message : String(error),
+      );
+    } finally {
+      ui.setCancelPending(false);
     }
   }
 
@@ -190,6 +213,7 @@ export function createScanController(
   return {
     startScan,
     cancelScan,
+    stopScan,
     isServiceReady: () => serviceReady,
     setServiceReady: (ready: boolean) => {
       serviceReady = ready;

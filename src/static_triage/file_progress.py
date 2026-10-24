@@ -52,6 +52,24 @@ def _subject(group: AnalysisGroup) -> str:
     return subject
 
 
+# Receives the planned order of a stage's files, once, when it begins.
+QueueCallback = Callable[[list[dict[str, object]]], None]
+
+
+def queue_item(
+    position: int,
+    group: AnalysisGroup,
+    mode: str | None = None,
+) -> dict[str, object]:
+    return {
+        "position": position,
+        "path": short_path(group.representative.relative_path),
+        "size": format_size(group.representative.size_bytes),
+        "copies": group.duplicate_count,
+        "mode": mode or "",
+    }
+
+
 def started_message(
     analyzer: str,
     position: int,
@@ -78,9 +96,12 @@ def finished_message(
     timed_out: bool,
     duration_seconds: float,
     stopped_at_budget_end: bool = False,
+    stopped_by_user: bool = False,
 ) -> str:
     took = format_duration(duration_seconds)
-    if stopped_at_budget_end:
+    if stopped_by_user:
+        outcome = f"stopped by the user after {took}"
+    elif stopped_at_budget_end:
         outcome = f"stopped at the end of the time budget after {took}"
     elif timed_out:
         outcome = f"timed out after {took}"

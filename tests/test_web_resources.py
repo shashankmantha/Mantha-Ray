@@ -38,7 +38,7 @@ class RecordingController:
             raise self.capacity
         return self.capacity
 
-    def scan(self, request, on_status=None, on_progress=None):
+    def scan(self, request, on_status=None, on_progress=None, on_queue=None):
         self.requests.append(request)
         raise HostScanError("stop here")
 

@@ -7,6 +7,7 @@ Every state mutation happens under that lock.
 from __future__ import annotations
 
 import json
+import re
 import threading
 from typing import Any
 from uuid import uuid4
@@ -30,6 +31,24 @@ from .state import (
     stages_from_report,
 )
 from .validation import read_bounded_text
+
+
+# Per-file progress lines, e.g. "capa 5/47 completed in 31 s: steam_api64.dll".
+FILE_LINE = re.compile(
+    r"^(?:capa|FLOSS) (?P<position>\d+)/\d+ "
+    r"(?P<verb>started alone|started|completed|timed out|failed|stopped|"
+    r"ran out of memory)"
+    r"(?:[^:]*?\b(?:in|after) (?P<took>[^:;]+))?"
+)
+FILE_STATUSES = {
+    "started": "running",
+    "started alone": "running",
+    "completed": "completed",
+    "timed out": "timed out",
+    "failed": "failed",
+    "stopped": "stopped",
+    "ran out of memory": "waiting",
+}
 
 
 class ScanRuntime:
@@ -137,6 +156,56 @@ class ScanRuntime:
 
         return self.get(scan_id)
 
+    def stop(
+        self,
+        scan_id: str,
+    ) -> dict[str, Any]:
+        """Ask an active scan to stop and save a report of finished work."""
+
+        with self._lock:
+            state = self._scans.get(scan_id)
+
+            if state is None:
+                raise HostScanError(
+                    "The requested scan does not exist."
+                )
+
+            if state.state not in ACTIVE_STATES or state.state in (
+                "stopping",
+                "cancelling",
+            ):
+                return state.to_dict()
+
+            before_container = state.state in ("queued", "preflight")
+
+            self._record_locked(
+                state,
+                "cancelling" if before_container else "stopping",
+                (
+                    "Cancelling: the scan hadn't started analyzing yet."
+                    if before_container
+                    else "Stopping: ending the analyses in progress and "
+                    "saving a report of the work finished so far..."
+                ),
+            )
+
+        if before_container:
+            self.controller.cancel()
+            return self.get(scan_id)
+
+        if self.controller.stop() == "cancelled":
+            with self._lock:
+                state = self._scans[scan_id]
+                if state.state == "stopping":
+                    self._record_locked(
+                        state,
+                        "cancelling",
+                        "The scan had only just started, so it was "
+                        "cancelled instead; there was nothing to save.",
+                    )
+
+        return self.get(scan_id)
+
     def shutdown(self) -> None:
         """Stop an active container before the server exits."""
 
@@ -174,7 +243,7 @@ class ScanRuntime:
                 f"Docker server {version} is available.",
             )
 
-            if self.get(scan_id)["state"] == "cancelling":
+            if self.get(scan_id)["state"] in ("cancelling", "stopping"):
                 raise ScanCancelled(
                     "The scan was cancelled."
                 )
@@ -202,6 +271,10 @@ class ScanRuntime:
                         status,
                         message,
                     )
+                ),
+                on_queue=(
+                    lambda stage, offset, total, items:
+                    self._queue(scan_id, stage, offset, total, items)
                 ),
             )
 
@@ -278,6 +351,66 @@ class ScanRuntime:
                 }
             )
 
+    def _queue(
+        self,
+        scan_id: str,
+        stage: str,
+        offset: int,
+        total: int,
+        items: list[dict[str, object]],
+    ) -> None:
+        """Record one chunk of a stage's planned file order."""
+
+        with self._lock:
+            state = self._scans[scan_id]
+            queue = state.queues.get(stage)
+            if queue is None or queue["total"] != total or offset == 0:
+                queue = {"total": total, "items": [None] * total}
+                state.queues[stage] = queue
+            for item in items:
+                index = int(item["position"]) - 1
+                if 0 <= index < total:
+                    queue["items"][index] = {
+                        **item,
+                        "status": "waiting",
+                        "detail": "",
+                    }
+
+    def _track_file(
+        self,
+        state: WebScanState,
+        stage: str,
+        status: str,
+        message: str,
+    ) -> None:
+        """Move a queued file along using its per-file progress line."""
+
+        queue = state.queues.get(stage)
+        if queue is None:
+            return
+        if status in ("completed", "incomplete", "error"):
+            for item in queue["items"]:
+                if item is not None and item["status"] in ("waiting", "running"):
+                    item["status"] = "not reached"
+            return
+        match = FILE_LINE.match(message)
+        if match is None:
+            return
+        position = int(match.group("position"))
+        if not 1 <= position <= queue["total"]:
+            return
+        item = queue["items"][position - 1]
+        if item is None:
+            return
+        verb = match.group("verb")
+        item["status"] = FILE_STATUSES[verb]
+        if verb == "ran out of memory":
+            item["detail"] = "will retry alone"
+        elif verb.startswith("started"):
+            item["detail"] = "alone" if verb == "started alone" else ""
+        else:
+            item["detail"] = (match.group("took") or "").strip()
+
     def _stage(
         self,
         scan_id: str,
@@ -300,6 +433,7 @@ class ScanRuntime:
                 return
 
             state.stages[stage] = status
+            self._track_file(state, stage, status, message)
             state.message = message
             state.updated_at = now()
             state.events.append(

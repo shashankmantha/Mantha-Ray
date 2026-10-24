@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 
+from . import stop_request
 from . import __version__
 from .config import ScanConfig
 from .errors import TriageError
@@ -271,6 +272,49 @@ def _print_progress(
     )
 
 
+# A queue line must stay under the host's 8192-character progress limit.
+QUEUE_LINE_BUDGET = 6000
+
+
+def _print_queue(
+    stage: str,
+    items: list[dict[str, object]],
+) -> None:
+    """Write a stage's planned file order as one or more JSONL lines."""
+
+    total = len(items)
+    chunk: list[dict[str, object]] = []
+    offset = 0
+
+    def flush() -> None:
+        print(
+            json.dumps(
+                {
+                    "type": "queue",
+                    "stage": stage,
+                    "offset": offset,
+                    "total": total,
+                    "items": chunk,
+                },
+                sort_keys=True,
+            ),
+            flush=True,
+        )
+
+    size = 0
+    for item in items:
+        item_size = len(json.dumps(item)) + 2
+        if chunk and size + item_size > QUEUE_LINE_BUDGET:
+            flush()
+            offset += len(chunk)
+            chunk = []
+            size = 0
+        chunk.append(item)
+        size += item_size
+    if chunk:
+        flush()
+
+
 def _run_gui(
     args: argparse.Namespace,
 ) -> int:
@@ -336,6 +380,13 @@ def main(
     if args.command != "scan":
         return 2
 
+    # Installed first, so a stop request that arrives early is not lost
+    # and doesn't kill the process (SIGUSR1's default action).
+    try:
+        stop_request.install()
+    except ValueError:
+        pass  # not the main thread (embedded use); stop is unavailable
+
     try:
         profile = resolve_scan_profile(args)
     except ResourceProfileError as exc:
@@ -367,6 +418,7 @@ def main(
             args.staging_subdirectory,
             config,
             on_progress=progress_callback,
+            on_queue=_print_queue if args.progress_jsonl else None,
         )
 
     except (

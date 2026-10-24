@@ -1558,3 +1558,181 @@ h2 {
     inset: 0.5rem;
   }
 }
+/* Stop scan dialog */
+.stop-dialog {
+  max-width: 30rem;
+  padding: 1.5rem;
+  border: 1px solid var(--line, #33405a);
+  border-radius: 0.75rem;
+  background: var(--panel, #0f1626);
+  color: inherit;
+}
+
+.stop-dialog::backdrop {
+  background: rgb(0 0 0 / 0.6);
+}
+
+.stop-dialog-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+
+.stop-hint {
+  margin: 0.75rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+.stop-discard {
+  margin-top: 1rem;
+  font-size: 0.9rem;
+}
+
+.stop-discard summary {
+  cursor: pointer;
+  opacity: 0.75;
+}
+
+.stop-discard .btn {
+  margin-top: 0.5rem;
+}
+
+.hold-button {
+  position: relative;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+
+.hold-button .hold-label {
+  position: relative;
+}
+
+.hold-button .hold-fill {
+  position: absolute;
+  inset: 0;
+  transform: scaleX(0);
+  transform-origin: left;
+  background: rgb(220 53 69 / 0.35);
+}
+
+.hold-button.holding .hold-fill {
+  transform: scaleX(1);
+  transition: transform var(--hold-ms, 2000ms) linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hold-button.holding .hold-fill {
+    transition: none;
+    transform: scaleX(1);
+    opacity: 0.6;
+  }
+}
+
+/* Keep the outline look while pressed so the fill shows the hold progress. */
+.hold-button.btn-outline-danger {
+  --bs-btn-active-bg: transparent;
+  --bs-btn-active-color: #ff9aa4;
+  --bs-btn-active-border-color: #dc3545;
+}
+
+.hold-button.btn-outline-secondary {
+  --bs-btn-active-bg: transparent;
+  --bs-btn-active-color: #e8edff;
+  --bs-btn-active-border-color: #6c757d;
+}
+
+.hold-button.btn-outline-danger .hold-fill {
+  background: rgb(220 53 69 / 0.55);
+}
+
+.hold-button.btn-outline-secondary .hold-fill {
+  background: rgb(108 117 125 / 0.55);
+}
+
+/* Queue view: terminal-style list of each analyzer's planned files. */
+.activity-view-switch {
+  display: flex;
+  gap: 0;
+}
+
+.activity-view-switch .activity-console-button[aria-pressed="true"] {
+  border-color: #68b8ff;
+  color: #080e20;
+  background: #68b8ff;
+}
+
+.activity-view-switch .activity-console-button[aria-pressed="false"] {
+  border-color: #34436f;
+  color: #8a95bb;
+}
+
+.queue-panel {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.76rem;
+  line-height: 1.55;
+  padding: 0.6rem 0.75rem;
+}
+
+.queue-header {
+  margin: 0.4rem 0 0.2rem;
+  color: #cdd7f5;
+  font-weight: 700;
+}
+
+.queue-header:first-child {
+  margin-top: 0;
+}
+
+.queue-line {
+  display: flex;
+  gap: 0.6rem;
+  white-space: nowrap;
+  color: #aeb8d8;
+}
+
+.queue-marker {
+  width: 1ch;
+  flex: none;
+}
+
+.queue-path {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.queue-meta,
+.queue-detail {
+  flex: none;
+  color: #6f7ba3;
+}
+
+.queue-current {
+  flex: none;
+  color: #6fe4b6;
+  font-weight: 700;
+}
+
+.queue-running {
+  color: #eef1ff;
+  background: rgb(111 228 182 / 0.08);
+}
+
+.queue-completed {
+  color: #7f8bb3;
+}
+
+.queue-timed-out,
+.queue-failed {
+  color: #ffb3a0;
+}
+
+.queue-not-reached {
+  color: #5d6890;
+}
+
+.queue-empty {
+  color: #7f8bb3;
+}

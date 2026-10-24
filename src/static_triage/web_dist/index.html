@@ -12,8 +12,8 @@
       content="Mantha Ray local static malware triage"
     />
     <title>Mantha Ray</title>
-    <script type="module" crossorigin src="./assets/index-CmI0oNLe.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-BQXKkXMY.css">
+    <script type="module" crossorigin src="./assets/index-Cz-31Acj.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-yQ0F3T4Z.css">
   </head>
 
   <body>
@@ -291,11 +291,12 @@
                 ></div>
               </div>
               <button
-                id="cancel-scan"
+                id="stop-scan"
                 class="btn btn-outline-danger"
                 type="button"
+                aria-haspopup="dialog"
               >
-                Cancel scan
+                Stop scan&hellip;
               </button>
             </section>
 
@@ -307,6 +308,24 @@
               </div>
 
               <div class="live-activity-actions">
+                <div class="activity-view-switch" role="group" aria-label="View">
+                  <button
+                    id="view-activity"
+                    class="activity-console-button"
+                    type="button"
+                    aria-pressed="true"
+                  >
+                    Activity
+                  </button>
+                  <button
+                    id="view-queue"
+                    class="activity-console-button"
+                    type="button"
+                    aria-pressed="false"
+                  >
+                    Queue
+                  </button>
+                </div>
                 <button
                   id="activity-autoscroll"
                   class="activity-console-button"
@@ -331,6 +350,11 @@
               class="live-activity-panel"
               aria-label="Live scan activity"
             ></pre>
+            <div
+              id="queue-panel"
+              class="live-activity-panel queue-panel d-none"
+              aria-label="Planned file order"
+            ></div>
           </div>
 
             <section id="results-section" class="d-none">
@@ -484,5 +508,49 @@
       </div>
     </div>
 
+    <dialog
+      id="stop-dialog"
+      class="stop-dialog"
+      aria-labelledby="stop-dialog-title"
+      aria-describedby="stop-dialog-body"
+    >
+      <h2 id="stop-dialog-title" class="h5">Stop this scan?</h2>
+      <p id="stop-dialog-body">
+        Analyses in progress are ended and a report of the work finished so
+        far is saved. Files not analyzed yet are listed as not reached. A
+        stopped scan can't be resumed.
+      </p>
+      <div class="stop-dialog-actions">
+        <button id="stop-keep" class="btn btn-primary" type="button">
+          Keep scanning
+        </button>
+        <button
+          id="stop-confirm"
+          class="btn btn-outline-danger hold-button"
+          type="button"
+          aria-describedby="stop-hold-hint"
+        >
+          <span class="hold-fill" aria-hidden="true"></span>
+          <span class="hold-label">Hold to stop and save report</span>
+        </button>
+      </div>
+      <p id="stop-hold-hint" class="stop-hint">
+        Press and hold for 2 seconds. Letting go early keeps the scan running.
+      </p>
+      <details class="stop-discard">
+        <summary>Discard the scan instead</summary>
+        <p class="stop-hint">
+          Ends the scan immediately. Nothing it has done is saved.
+        </p>
+        <button
+          id="stop-discard"
+          class="btn btn-sm btn-outline-secondary hold-button"
+          type="button"
+        >
+          <span class="hold-fill" aria-hidden="true"></span>
+          <span class="hold-label">Hold to discard</span>
+        </button>
+      </details>
+    </dialog>
   </body>
 </html>

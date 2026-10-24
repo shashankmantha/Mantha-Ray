@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from .runner import CommandResult, run_command
+from .stop_request import STOPPED_MESSAGE
 
 
 class ClamAVStatus(str, Enum):
@@ -116,7 +117,11 @@ def _normalize_result(
 
     issues: list[str] = []
 
-    if execution.timed_out:
+    if execution.stopped:
+        status = ClamAVStatus.ERROR
+        issues.append("ClamAV did not finish: " + STOPPED_MESSAGE)
+
+    elif execution.timed_out:
         status = ClamAVStatus.TIMED_OUT
         issues.append("ClamAV exceeded its timeout")
 
@@ -203,6 +208,7 @@ def run_clamav(
         command,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
+        stoppable=True,
         env={
             "PATH": "/usr/local/bin:/usr/bin:/bin",
             "LC_ALL": "C",

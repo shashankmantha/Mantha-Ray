@@ -117,7 +117,11 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         if r.get("timed_out") is True and r.get("stopped_at_budget_end") is True
     )
     timed_out = sum(1 for r in results if r.get("timed_out") is True) - stopped
-    failed = len(results) - completed - timed_out - stopped
+    by_user = sum(
+        1 for r in results
+        if r.get("stopped_by_user") is True and r.get("complete") is not True
+    )
+    failed = len(results) - completed - timed_out - stopped - by_user
     retried = sum(1 for r in results if r.get("retried_alone") is True)
     too_big = sum(1 for r in results if r.get("needs_more_memory") is True)
     plain = sum(1 for r in results if r.get("mode") == "plain")
@@ -130,6 +134,8 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     ]
     if stopped:
         counts.append(f"{stopped} stopped at budget end")
+    if by_user:
+        counts.append(f"{by_user} stopped by you")
     if failed:
         counts.append(f"{failed} failed")
     if retried:
@@ -160,6 +166,8 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         position = result.get("analysis_position")
         if result.get("complete"):
             status = "completed"
+        elif result.get("stopped_by_user"):
+            status = "stopped"
         elif result.get("timed_out") and result.get("stopped_at_budget_end"):
             status = "stopped"
         elif result.get("timed_out"):
@@ -171,7 +179,9 @@ def analyzer_lines(name: str, data: object) -> list[str]:
         notes = []
         if limit is not None and status != "completed":
             notes.append(f"limit {format_duration(limit)}")
-        if status == "stopped":
+        if status == "stopped" and result.get("stopped_by_user"):
+            notes.append("stopped by you")
+        elif status == "stopped":
             notes.append("budget ran out")
         if result.get("mode") == "plain":
             kept = result.get("strings")
@@ -220,6 +230,9 @@ def summarize(case: Path) -> str:
         "",
         *analyzer_lines("FLOSS", analyzers.get("floss")),
     ]
+    warnings = [w for w in report.get("warnings") or [] if isinstance(w, str)]
+    if any("stopped by the user" in w for w in warnings):
+        lines += ["", "Stopped  by you before it finished; this covers the work done by then."]
     reasons = report.get("incomplete_reasons") or []
     if reasons:
         lines += ["", "Coverage gaps:"]

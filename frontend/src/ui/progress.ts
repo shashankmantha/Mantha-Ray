@@ -13,7 +13,11 @@ import {
   liveActivityPanel,
   progressMessage,
   progressState,
+  queuePanel,
+  viewActivityButton,
+  viewQueueButton,
 } from "./elements";
+import { renderQueue } from "./queueView";
 import { showError } from "./shell";
 
 const stageOrder: readonly StageName[] = [
@@ -33,6 +37,8 @@ const stageLabels: Record<StageName, string> = {
 };
 
 let activityAutoScroll = true;
+let showingQueue = false;
+let lastState: ScanState | null = null;
 
 function stageStatusText(status: StageStatus): string {
   switch (status) {
@@ -138,12 +144,33 @@ function setActivityAutoScroll(
 export function renderLiveActivity(
   state: ScanState,
 ): void {
+  lastState = state;
+  if (showingQueue) {
+    const current = renderQueue(queuePanel, state);
+    if (activityAutoScroll && current) {
+      current.scrollIntoView({ block: "center" });
+    }
+    return;
+  }
+
   liveActivityPanel.textContent = activityText(
     state.events,
   );
 
   if (activityAutoScroll) {
     scrollActivityToBottom();
+  }
+}
+
+function setView(queue: boolean): void {
+  showingQueue = queue;
+  viewQueueButton.setAttribute("aria-pressed", String(queue));
+  viewActivityButton.setAttribute("aria-pressed", String(!queue));
+  queuePanel.classList.toggle("d-none", !queue);
+  liveActivityPanel.classList.toggle("d-none", queue);
+  copyActivityButton.classList.toggle("d-none", queue);
+  if (lastState) {
+    renderLiveActivity(lastState);
   }
 }
 
@@ -183,6 +210,9 @@ export function renderProgress(state: ScanState): void {
 }
 
 export function configureLiveActivity(): void {
+  viewActivityButton.addEventListener("click", () => setView(false));
+  viewQueueButton.addEventListener("click", () => setView(true));
+
   activityAutoscrollButton.addEventListener(
     "click",
     () => {

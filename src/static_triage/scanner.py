@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Callable, Literal
 from uuid import uuid4
 
+from . import stop_request
 from .boundary import (
     resolve_results_root,
     resolve_scan_target,
@@ -46,6 +47,10 @@ ProgressCallback = Callable[
     [ScanStage, ScanStageStatus, str],
     None,
 ]
+
+
+# Receives (stage, planned files) when capa or FLOSS begins.
+StageQueueCallback = Callable[[str, list[dict[str, object]]], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +107,7 @@ def run_inventory_scan(
     config: ScanConfig,
     *,
     on_progress: ProgressCallback | None = None,
+    on_queue: StageQueueCallback | None = None,
 ) -> ScanResult:
     """Run inventory, ClamAV, capa, and FLOSS analysis."""
 
@@ -277,6 +283,11 @@ def run_inventory_scan(
                         message,
                     )
                 ),
+                on_queue=(
+                    (lambda items: on_queue("capa", items))
+                    if on_queue is not None
+                    else None
+                ),
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -371,6 +382,11 @@ def run_inventory_scan(
                         message,
                     )
                 ),
+                on_queue=(
+                    (lambda items: on_queue("floss", items))
+                    if on_queue is not None
+                    else None
+                ),
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -413,6 +429,12 @@ def run_inventory_scan(
         "running",
         "Generating case artifacts and reports...",
     )
+
+    if stop_request.requested():
+        warnings.append(
+            "The scan was stopped by the user before it finished. "
+            "This report covers only the work finished by then."
+        )
 
     report = write_case_artifacts(
         case_directory=case_directory,

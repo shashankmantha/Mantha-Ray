@@ -287,6 +287,14 @@ class ScanService:
 
         return self._runtime.get(scan_id)
 
+    def stop(
+        self,
+        scan_id: str,
+    ) -> dict[str, Any]:
+        """Stop an active scan and keep a report of finished work."""
+
+        return self._runtime.stop(scan_id)
+
     def cancel(
         self,
         scan_id: str,

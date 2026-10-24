@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 import subprocess
 import threading
+import time
 from typing import Callable
 from uuid import uuid4
 
@@ -21,11 +22,21 @@ from ..resource_profiles import (
     ResourceProfileError,
     check_capacity,
 )
-from .progress import parse_progress_event
+from .progress import parse_progress_event, parse_queue_event
 from .result import DockerScanResult, parse_scan_output
 
 
 MAX_CAPTURE_BYTES = 2 * 1024 * 1024
+
+
+# A stop asks the scan to finish up and write its report (SIGUSR1, handled
+# by static_triage.stop_request inside the container).
+STOP_SIGNAL_NAME = "USR1"
+# Give the scan this long to write its report after a stop request.
+STOP_GRACE_SECONDS = 180
+# Before this, the Python process may not have installed its handler yet,
+# and there is nothing worth saving: a stop becomes a cancel.
+STOP_MIN_RUNTIME_SECONDS = 15
 
 
 class DockerScanController:
@@ -50,6 +61,7 @@ class DockerScanController:
         ) = None
 
         self._cancel_requested = False
+        self._started_at: float | None = None
 
     def _resolve_engine(self) -> str:
         engine_path = shutil.which(
@@ -226,6 +238,10 @@ class DockerScanController:
             Callable[[str, str, str], None]
             | None
         ) = None,
+        on_queue: (
+            Callable[[str, int, int, list[dict[str, object]]], None]
+            | None
+        ) = None,
     ) -> DockerScanResult:
         """Run a scan synchronously in a worker thread."""
 
@@ -294,6 +310,7 @@ class DockerScanController:
 
         with self._lock:
             self._process = process
+            self._started_at = time.monotonic()
             cancelled_before_start = (
                 self._cancel_requested
             )
@@ -355,6 +372,10 @@ class DockerScanController:
                         is not None
                     ):
                         on_progress(*progress)
+                    elif on_queue is not None:
+                        queued = parse_queue_event(line)
+                        if queued is not None:
+                            on_queue(*queued)
 
             except (OSError, ValueError):
                 return
@@ -422,6 +443,7 @@ class DockerScanController:
 
                 self._process = None
                 self._container_name = None
+                self._started_at = None
 
         stdout = "".join(stdout_parts)
         stderr = "".join(stderr_parts)
@@ -484,6 +506,64 @@ class DockerScanController:
             stderr,
             validated.results_directory,
         )
+
+    def stop(self) -> str:
+        """Ask the running scan to stop and still write its report.
+
+        Returns "stopping" when the request was sent, or "cancelled" when
+        the scan had barely started (nothing worth saving) or the request
+        couldn't be delivered, in which case it was cancelled instead. If
+        the container hasn't finished within STOP_GRACE_SECONDS, it is
+        cancelled so a stuck scan can't hold the machine.
+        """
+
+        with self._lock:
+            process = self._process
+            container_name = self._container_name
+            started_at = self._started_at
+
+        if (
+            process is None
+            or container_name is None
+            or started_at is None
+            or time.monotonic() - started_at < STOP_MIN_RUNTIME_SECONDS
+        ):
+            self.cancel()
+            return "cancelled"
+
+        try:
+            delivered = subprocess.run(
+                [
+                    self._resolve_engine(),
+                    "kill",
+                    "--signal",
+                    STOP_SIGNAL_NAME,
+                    container_name,
+                ],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+            ).returncode == 0
+        except (HostScanError, OSError, subprocess.TimeoutExpired):
+            delivered = False
+
+        if not delivered:
+            self.cancel()
+            return "cancelled"
+
+        def watchdog() -> None:
+            try:
+                process.wait(timeout=STOP_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                self.cancel()
+
+        threading.Thread(
+            target=watchdog,
+            name="mantha-ray-stop-watchdog",
+            daemon=True,
+        ).start()
+        return "stopping"
 
     def cancel(self) -> None:
         """Request cancellation of the active container."""

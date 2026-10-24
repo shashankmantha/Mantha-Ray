@@ -17,7 +17,8 @@ from .capa_risk import (
     assess_capability,
     summarize_risk,
 )
-from .file_progress import FileProgress
+from .file_progress import FileProgress, QueueCallback
+from . import stop_request
 from .memory_budget import estimate_mib, memory_policy
 from .parallel import (
     looks_memory_killed,
@@ -120,6 +121,8 @@ class CapaResult:
     memory_estimate_mib: int | None = None
     # Ran out of memory with nothing else running: the profile is too small.
     needs_more_memory: bool = False
+    # Ended early because the user stopped the scan.
+    stopped_by_user: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -146,6 +149,7 @@ class CapaResult:
             "peak_memory_mib": self.peak_memory_mib,
             "memory_estimate_mib": self.memory_estimate_mib,
             "needs_more_memory": self.needs_more_memory,
+            "stopped_by_user": self.stopped_by_user,
         }
 
     @property
@@ -363,7 +367,11 @@ def _normalize_result(
     issues: list[str] = []
     capabilities: tuple[CapaCapability, ...] = ()
 
-    if execution.timed_out:
+    if execution.stopped:
+        status = CapaStatus.ERROR
+        issues.append("capa did not finish: " + stop_request.STOPPED_MESSAGE)
+
+    elif execution.timed_out:
         status = CapaStatus.TIMED_OUT
         issues.append("capa exceeded its timeout")
 
@@ -418,6 +426,7 @@ def _normalize_result(
         output_truncated=execution.output_truncated,
         duration_seconds=execution.duration_seconds,
         peak_memory_mib=execution.peak_memory_mib,
+        stopped_by_user=execution.stopped,
         stdout=execution.stdout,
         stderr=execution.stderr,
         error="; ".join(issues) or None,
@@ -533,6 +542,7 @@ def run_capa(
         command,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
+        stoppable=True,
         env={
             "PATH": (
                 "/opt/capa-venv/bin:"
@@ -620,6 +630,7 @@ def run_capa_batch(
     workers: int = 1,
     file_timeout_max_seconds: float | None = None,
     memory_budget_mib: int | None = None,
+    on_queue: QueueCallback | None = None,
 ) -> CapaBatchResult:
     """Run capa over a bounded set of eligible binaries."""
 
@@ -703,7 +714,9 @@ def run_capa_batch(
         clock=lambda: time.monotonic(),
         started_at=started,
         on_file=on_file,
-        retry_alone_if=lambda result: looks_memory_killed(
+        on_queue=on_queue,
+        retry_alone_if=lambda result: not result.stopped_by_user
+        and looks_memory_killed(
             result.return_code,
             result.timed_out,
         ),
@@ -737,6 +750,7 @@ def run_capa_batch(
             memory_estimate_mib=item.memory_estimate_mib,
             needs_more_memory=(
                 not item.shared
+                and not item.result.stopped_by_user
                 and looks_memory_killed(
                     item.result.return_code,
                     item.result.timed_out,
@@ -762,8 +776,11 @@ def run_capa_batch(
     if skipped_due_to_timeout:
         issues.append(
             f"{skipped_due_to_timeout} selected files "
-            "were not analyzed before the capa "
-            "total-time limit"
+            + (
+                "were not analyzed because " + stop_request.STOPPED_MESSAGE
+                if stop_request.requested()
+                else "were not analyzed before the capa total-time limit"
+            )
         )
 
     failed_files = sum(

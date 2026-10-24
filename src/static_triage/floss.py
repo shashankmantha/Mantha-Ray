@@ -8,8 +8,9 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from .file_progress import FileProgress
+from .file_progress import FileProgress, QueueCallback
 from . import plain_strings
+from . import stop_request
 from .memory_budget import estimate_mib, memory_policy
 from .parallel import (
     looks_memory_killed,
@@ -128,6 +129,8 @@ class FlossResult:
     memory_estimate_mib: int | None = None
     # Ran out of memory with nothing else running: the profile is too small.
     needs_more_memory: bool = False
+    # Ended early because the user stopped the scan.
+    stopped_by_user: bool = False
     # "emulation" (FLOSS proper) or "plain" (fast pass for big files).
     mode: str = EMULATION
     # For plain mode: whether the whole file was read.
@@ -167,6 +170,7 @@ class FlossResult:
             "peak_memory_mib": self.peak_memory_mib,
             "memory_estimate_mib": self.memory_estimate_mib,
             "needs_more_memory": self.needs_more_memory,
+            "stopped_by_user": self.stopped_by_user,
             "mode": self.mode,
             "fully_scanned": self.fully_scanned,
         }
@@ -435,7 +439,11 @@ def _normalize_result(
     total_strings = 0
     strings_truncated = False
 
-    if execution.timed_out:
+    if execution.stopped:
+        status = FlossStatus.ERROR
+        issues.append("FLOSS did not finish: " + stop_request.STOPPED_MESSAGE)
+
+    elif execution.timed_out:
         status = FlossStatus.TIMED_OUT
         issues.append(
             "FLOSS exceeded its timeout"
@@ -517,6 +525,7 @@ def _normalize_result(
         stderr=execution.stderr,
         error="; ".join(issues) or None,
         peak_memory_mib=execution.peak_memory_mib,
+        stopped_by_user=execution.stopped,
     )
 
 
@@ -581,6 +590,7 @@ def run_floss(
         command,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
+        stoppable=True,
         env={
             "PATH": (
                 "/opt/floss-venv/bin:"
@@ -719,6 +729,7 @@ def run_floss_batch(
     workers: int = 1,
     file_timeout_max_seconds: float | None = None,
     memory_budget_mib: int | None = None,
+    on_queue: QueueCallback | None = None,
 ) -> FlossBatchResult:
     """Run FLOSS over a bounded set of eligible PE files."""
 
@@ -846,10 +857,12 @@ def run_floss_batch(
         clock=lambda: time.monotonic(),
         started_at=started,
         on_file=on_file,
+        on_queue=on_queue,
         detail_for=lambda group: (
             "plain strings" if wants_plain_strings(group.representative) else None
         ),
-        retry_alone_if=lambda result: looks_memory_killed(
+        retry_alone_if=lambda result: not result.stopped_by_user
+        and looks_memory_killed(
             result.return_code,
             result.timed_out,
         ),
@@ -884,6 +897,7 @@ def run_floss_batch(
             memory_estimate_mib=item.memory_estimate_mib,
             needs_more_memory=(
                 not item.shared
+                and not item.result.stopped_by_user
                 and looks_memory_killed(
                     item.result.return_code,
                     item.result.timed_out,
@@ -909,8 +923,11 @@ def run_floss_batch(
     if skipped_due_to_timeout:
         issues.append(
             f"{skipped_due_to_timeout} selected files "
-            "were not analyzed before the FLOSS "
-            "total-time limit"
+            + (
+                "were not analyzed because " + stop_request.STOPPED_MESSAGE
+                if stop_request.requested()
+                else "were not analyzed before the FLOSS total-time limit"
+            )
         )
 
     failed_files = sum(

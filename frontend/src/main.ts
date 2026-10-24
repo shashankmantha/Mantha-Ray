@@ -6,7 +6,6 @@ import { loadHistory, openCase, selectSession } from "./history";
 import { createScanController } from "./scanController";
 import { configureArtifactTreePopout } from "./ui/artifactTree";
 import {
-  cancelButton,
   chooseResults,
   chooseSource,
   newScanButton,
@@ -14,7 +13,9 @@ import {
   resultsInput,
   sourceInput,
   startButton,
+  stopButton,
 } from "./ui/elements";
+import { configureStopDialog, openStopDialog } from "./ui/stopDialog";
 import type { ResourceOptions } from "./types";
 import { configureLiveActivity } from "./ui/progress";
 import {
@@ -45,7 +46,7 @@ const scanController = createScanController({
   renderSelectedSession,
   selectSession,
   setCancelPending: (pending) => {
-    cancelButton.disabled = pending;
+    stopButton.disabled = pending;
   },
   resourceSelection: getResourceSelection,
 });
@@ -163,10 +164,11 @@ async function initialize(): Promise<void> {
     "click",
     () => void scanController.startScan(),
   );
-  cancelButton.addEventListener(
-    "click",
-    () => void scanController.cancelScan(),
-  );
+  configureStopDialog({
+    stopAndSave: () => void scanController.stopScan(),
+    discard: () => void scanController.cancelScan(),
+  });
+  stopButton.addEventListener("click", openStopDialog);
   openCaseButton.addEventListener("click", () => void openCase());
   try {
     await establishSession();

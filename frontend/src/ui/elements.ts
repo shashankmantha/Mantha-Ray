@@ -37,7 +37,7 @@ export const chooseResults = element<HTMLButtonElement>("choose-results");
 
 export const startButton = element<HTMLButtonElement>("start-scan");
 
-export const cancelButton = element<HTMLButtonElement>("cancel-scan");
+export const stopButton = element<HTMLButtonElement>("stop-scan");
 
 export const openCaseButton = element<HTMLButtonElement>("open-case");
 
@@ -66,3 +66,8 @@ export const copyActivityButton =
   element<HTMLButtonElement>(
     "copy-activity",
   );
+export const viewActivityButton = element<HTMLButtonElement>("view-activity");
+
+export const viewQueueButton = element<HTMLButtonElement>("view-queue");
+
+export const queuePanel = element<HTMLDivElement>("queue-panel");

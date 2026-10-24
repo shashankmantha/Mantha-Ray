@@ -5,11 +5,14 @@ from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
+from . import stop_request
 from .deduplication import AnalysisGroup
 from .file_progress import (
     FileProgress,
     finished_message,
+    QueueCallback,
     memory_retry_message,
+    queue_item,
     started_message,
 )
 
@@ -120,6 +123,7 @@ def run_groups(
     memory_budget_mib: int | None = None,
     memory_for: Callable[[AnalysisGroup], int] | None = None,
     detail_for: Callable[[AnalysisGroup], str | None] | None = None,
+    on_queue: QueueCallback | None = None,
 ) -> PoolRun[R]:
     # Groups start in priority order while the stage budget lasts. Each
     # file's timeout is capped by the budget left when it starts, so the
@@ -133,6 +137,15 @@ def run_groups(
 
     total = len(groups)
     started = clock() if started_at is None else started_at
+    if on_queue is not None and total:
+        on_queue([
+            queue_item(
+                position,
+                group,
+                detail_for(group) if detail_for else None,
+            )
+            for position, group in enumerate(groups, start=1)
+        ])
     pending: dict[Future[R], _Job] = {}
     finished: list[Finished[R]] = []
     retries: list[_Job] = []
@@ -182,6 +195,9 @@ def run_groups(
                 stopped_at_budget_end=(
                     timed_out and job.timeout < job.limit - 1e-6
                 ),
+                stopped_by_user=(
+                    not complete and stop_request.requested()
+                ),
             )
         )
 
@@ -195,7 +211,7 @@ def run_groups(
                 if not pending:
                     job = retries.pop(0)
                     left = remaining()
-                    if left >= minimum_start_seconds(
+                    if not stop_request.requested() and left >= minimum_start_seconds(
                         job.limit, total_timeout_seconds
                     ):
                         retry = _Job(
@@ -225,6 +241,9 @@ def run_groups(
                     and len(pending) < workers
                     and next_index < total
                 ):
+                    if stop_request.requested():
+                        out_of_time = True
+                        break
                     group = groups[next_index]
                     limit = timeout_for(group)
                     left = remaining()

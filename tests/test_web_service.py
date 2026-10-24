@@ -26,6 +26,7 @@ class SuccessfulController:
         request: DockerScanRequest,
         on_status=None,
         on_progress=None,
+        on_queue=None,
     ) -> DockerScanResult:
         if on_status is not None:
             on_status("Analyzer fixture is running.")
@@ -149,6 +150,7 @@ class BlockingController:
         request,
         on_status=None,
         on_progress=None,
+        on_queue=None,
     ):
         raise HostScanError(
             "Test scan should not reach analysis."
