@@ -144,6 +144,59 @@
                   aria-live="polite"
                 ></ul>
               </div>
+
+              <div id="rule-packs-panel" class="rule-panel">
+                <div class="resource-heading">
+                  <span id="rule-packs-label" class="form-label">
+                    YARA rules
+                  </span>
+                  <span id="rule-bundle" class="resource-capacity"></span>
+                </div>
+                <ul
+                  id="local-rules"
+                  class="local-rules"
+                  aria-labelledby="rule-packs-label"
+                ></ul>
+                <div class="local-rules-add">
+                  <label for="local-rule-file" class="visually-hidden">
+                    Your .yar rule file
+                  </label>
+                  <input
+                    id="local-rule-file"
+                    class="form-control form-control-sm"
+                    type="file"
+                    accept=".yar,.yara"
+                  />
+                  <label for="local-rule-severity" class="visually-hidden">
+                    What a match means
+                  </label>
+                  <select
+                    id="local-rule-severity"
+                    class="form-select form-select-sm"
+                  >
+                    <option value="suspicious" selected>
+                      Match = Needs Review
+                    </option>
+                    <option value="threat">Match = High Concern</option>
+                    <option value="info">Match = listed only</option>
+                  </select>
+                  <button
+                    id="local-rule-add"
+                    class="btn btn-outline-info btn-sm"
+                    type="button"
+                  >
+                    Add your rules
+                  </button>
+                </div>
+                <p
+                  id="local-rule-message"
+                  class="resource-summary"
+                  aria-live="polite"
+                >
+                  Add your own .yar file; it runs in every scan, beside the
+                  signed rule packs.
+                </p>
+              </div>
             </div>
 
             <div class="scan-actions">
@@ -156,7 +209,8 @@
               </button>
               <p class="pipeline-label">
                 Inventory <span>›</span> ClamAV <span>›</span>
-                capa <span>›</span> FLOSS <span>›</span> Report
+                YARA-X <span>›</span> capa <span>›</span> FLOSS
+                <span>›</span> Report
               </p>
             </div>
           </section>
@@ -220,6 +274,22 @@
                   <span class="stage-copy">
                     <strong>ClamAV</strong>
                     <small id="stage-clamav-status">
+                      Waiting
+                    </small>
+                  </span>
+                </li>
+
+                <li
+                  id="stage-yara"
+                  class="stage-step stage-state-waiting"
+                >
+                  <span
+                    class="stage-marker"
+                    aria-hidden="true"
+                  ></span>
+                  <span class="stage-copy">
+                    <strong>YARA-X</strong>
+                    <small id="stage-yara-status">
                       Waiting
                     </small>
                   </span>
@@ -362,8 +432,8 @@
                   <strong id="metric-files">—</strong>
                 </article>
                 <article class="metric-cell">
-                  <span>Files hashed</span>
-                  <strong id="metric-hashed">—</strong>
+                  <span>YARA-X matches</span>
+                  <strong id="metric-yara">—</strong>
                 </article>
                 <article class="metric-cell">
                   <span>capa matches</span>
@@ -449,6 +519,11 @@
                         <td>ClamAV</td>
                         <td id="clamav-status">—</td>
                         <td id="clamav-summary">—</td>
+                      </tr>
+                      <tr>
+                        <td>YARA-X</td>
+                        <td id="yara-status">—</td>
+                        <td id="yara-summary">—</td>
                       </tr>
                       <tr>
                         <td>capa</td>

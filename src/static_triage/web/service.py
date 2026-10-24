@@ -81,6 +81,70 @@ class ScanService:
         except HostScanError:
             return None
 
+    def rule_packs(self) -> dict[str, Any]:
+        """The signed bundle in use and your own rule files, for the UI."""
+
+        from ..packs import local, store
+
+        try:
+            info = store.status()
+        except store.PackInstallError as exc:
+            info = {"installed": None, "error": str(exc)}
+        installed = info.get("installed")
+        return {
+            "bundle": (
+                {
+                    "version": installed["version"],
+                    "verified": installed["verified"],
+                    "created_at": installed.get("created_at"),
+                    "stale": installed.get("stale", False),
+                    "rules": sum(p["rules"] for p in installed.get("packs", []) if p["loaded"]),
+                }
+                if installed
+                else None
+            ),
+            "local": local.list_local(),
+            "max_local": local.MAX_LOCAL_PACKS,
+            "error": info.get("error"),
+        }
+
+    def add_local_rules(
+        self,
+        filename: str,
+        content: str,
+        severity: str,
+    ) -> dict[str, Any]:
+        """Add one uploaded .yar file as your own rules, once it compiles."""
+
+        from ..packs import local, store
+        from ..packs.check import container_compile_check
+
+        if self.controller is None:
+            raise HostScanError("Rules can't be checked without the container engine.")
+        engine = getattr(self.controller, "engine", "docker")
+        image = getattr(self.controller, "image", "static-triage:core")
+        try:
+            added = local.add_local(
+                content,
+                source=filename,
+                severity=severity,
+                compile_check=lambda staging: container_compile_check(
+                    staging, image=image, engine=engine, target="/packs-local",
+                ),
+            )
+        except store.PackInstallError as exc:
+            raise HostScanError(str(exc)) from exc
+        return {"added": added, **self.rule_packs()}
+
+    def remove_local_rules(self, name: str) -> dict[str, Any]:
+        from ..packs import local, store
+
+        try:
+            local.remove_local(name)
+        except store.PackInstallError as exc:
+            raise HostScanError(str(exc)) from exc
+        return self.rule_packs()
+
     def resource_options(self) -> dict[str, Any]:
         """Presets, editable fields, and Docker's capacity for the UI."""
 

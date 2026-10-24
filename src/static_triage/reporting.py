@@ -19,6 +19,7 @@ from .clamav import ClamAVResult, ClamAVStatus
 from .config import ScanConfig
 from .deduplication import group_entries_by_sha256
 from .floss import FlossBatchResult
+from .yara_scan import YaraBatchResult
 from .models import (
     EntryKind,
     EntryState,
@@ -93,6 +94,7 @@ def _determine_status(
     capa_result: CapaBatchResult | None,
     floss_result: FlossBatchResult | None,
     summary: InventorySummary,
+    yara_result: YaraBatchResult | None = None,
 ) -> OverallStatus:
     """Calculate the strongest supported case status."""
 
@@ -103,6 +105,17 @@ def _determine_status(
     ):
         return OverallStatus.KNOWN_DETECTION
 
+    yara_counts = (
+        yara_result.severity_counts()
+        if yara_result is not None
+        else {"threat": 0, "suspicious": 0}
+    )
+
+    # A threat rule match is positive evidence, so like a ClamAV detection it
+    # sets the verdict even when other stages didn't finish.
+    if yara_counts["threat"]:
+        return OverallStatus.HIGH_CONCERN
+
     analyzers_complete = (
         clamav_result is not None
         and clamav_result.complete
@@ -110,6 +123,7 @@ def _determine_status(
         and capa_result.complete
         and floss_result is not None
         and floss_result.complete
+        and _yara_complete(yara_result)
     )
 
     inventory_complete = (
@@ -134,10 +148,33 @@ def _determine_status(
         summary.review_flags
         or capa_risk.review_required
         or floss_evidence
+        or yara_counts["suspicious"]
     ):
         return OverallStatus.NEEDS_REVIEW
 
     return OverallStatus.NO_INDICATORS_DETECTED
+
+def _yara_complete(yara_result: YaraBatchResult | None) -> bool:
+    # No packs installed isn't a gap in this scan; broken or partial ones are.
+    # A missing yr binary is already reported by the tool preflight.
+    return yara_result is None or yara_result.status in ("completed", "unavailable")
+
+
+def _yara_not_run() -> dict[str, Any]:
+    return {
+        "status": "not_run",
+        "complete": False,
+        "error": "YARA-X was unavailable",
+        "engine": "yara-x",
+        "bundle": None,
+        "packs": [],
+        "rule_count": 0,
+        "scanned_files": 0,
+        "matched_files": 0,
+        "severity_counts": {"threat": 0, "suspicious": 0, "info": 0},
+        "results": [],
+    }
+
 
 def write_case_artifacts(
     case_directory: Path,
@@ -153,6 +190,7 @@ def write_case_artifacts(
     warnings: list[str],
     capa_result: CapaBatchResult | None = None,
     floss_result: FlossBatchResult | None = None,
+    yara_result: YaraBatchResult | None = None,
     resources: dict[str, Any] | None = None,
     stage_timings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -207,6 +245,13 @@ def write_case_artifacts(
     elif not clamav_result.complete:
         incomplete_reasons.append(
             "ClamAV analysis was incomplete"
+        )
+
+    if yara_result is not None and not _yara_complete(yara_result):
+        incomplete_reasons.append(
+            "YARA-X analysis was incomplete"
+            if yara_result.status == "incomplete"
+            else "YARA-X could not use the installed rule packs"
         )
 
     if capa_result is None:
@@ -332,6 +377,12 @@ def write_case_artifacts(
     else:
         floss_payload = floss_result.to_dict()
 
+    yara_payload = (
+        yara_result.to_dict()
+        if yara_result is not None
+        else _yara_not_run()
+    )
+
     if unavailable_tools:
         incomplete_reasons.append(
             "tools unavailable during preflight: "
@@ -359,6 +410,7 @@ def write_case_artifacts(
         ],
         "analyzers": {
             "clamav": clamav_payload,
+            "yara": yara_payload,
             "capa": capa_payload,
             "floss": floss_payload,
         },
@@ -369,6 +421,7 @@ def write_case_artifacts(
         capa_result,
         floss_result,
         summary,
+        yara_result,
     )
 
     report = {
@@ -409,6 +462,7 @@ def write_case_artifacts(
         ],
         "analyzers": {
             "clamav": clamav_payload,
+            "yara": yara_payload,
             "capa": capa_payload,
             "floss": floss_payload,
         },
@@ -743,6 +797,74 @@ def _render_resources(
     return lines
 
 
+def _render_yara(yara: dict[str, Any] | None) -> list[str]:
+    if not isinstance(yara, dict):
+        return []
+    lines = [
+        "",
+        "## YARA-X rule matches",
+        "",
+        "- Status: **" + str(yara.get("status", "not_run")).replace("_", " ").title() + "**",
+    ]
+    bundle = yara.get("bundle")
+    if not isinstance(bundle, dict) and yara.get("packs"):
+        lines.append(f"- Rule packs: your own rules only, {yara.get('rule_count', 0)} rules")
+        for pack in yara.get("packs") or []:
+            lines.append(f"  - {_markdown_code(pack['id'])}: {pack['rules']} rules (your own rules)")
+    if isinstance(bundle, dict):
+        lines.append(
+            "- Rule packs: bundle "
+            + _markdown_code(bundle.get("version"))
+            + (" (signed)" if bundle.get("verified") else " (**unsigned**, for testing only)")
+            + f", {yara.get('rule_count', 0)} rules"
+        )
+        for pack in yara.get("packs") or []:
+            loaded = (
+                f"{pack['rules']} rule{'' if pack['rules'] == 1 else 's'}"
+                if pack.get("loaded")
+                else f"not loaded: {pack.get('not_loaded_reason')}"
+            )
+            mine = " (your own rules)" if pack.get("local") else ""
+            lines.append(
+                f"  - {_markdown_code(pack['id'])} v{pack['version']}: {loaded}{mine}"
+            )
+    if yara.get("status") in ("completed", "incomplete"):
+        counts = yara.get("severity_counts") or {}
+        lines.extend(
+            [
+                f"- Files scanned: `{yara.get('scanned_files', 0)}`"
+                f" (`{yara.get('duplicate_scans_avoided', 0)}` identical copies reused)",
+                f"- Files with matches: `{yara.get('matched_files', 0)}`",
+                "- Matches: "
+                + ", ".join(
+                    f"{counts.get(s, 0)} {s}" for s in ("threat", "suspicious", "info")
+                ),
+                "- Verdict impact: a `threat` match raises the case to High Concern, "
+                "a `suspicious` match to Needs Review; `info` matches are shown only.",
+            ]
+        )
+    if yara.get("error"):
+        lines.append("- Issues: " + _markdown_code(yara["error"]))
+
+    matched = [r for r in yara.get("results") or [] if r.get("matches")]
+    if matched:
+        lines.extend(["", "### Rule matches", ""])
+        for result in matched[:200]:
+            copies = result.get("reused_for") or []
+            suffix = f" (+{len(copies)} identical copies)" if copies else ""
+            for match in result["matches"][:20]:
+                description = match.get("description")
+                lines.append(
+                    f"- {_markdown_code(result['relative_path'])}{suffix} — "
+                    f"**{match['severity']}** "
+                    + _markdown_code(f"{match['pack']}/{match['rule']}")
+                    + (f" — {_markdown_code(description)}" if description else "")
+                )
+        if len(matched) > 200:
+            lines.append(f"- … and {len(matched) - 200} more files with matches")
+    return lines
+
+
 def _render_markdown(
     report: dict[str, Any],
 ) -> str:
@@ -863,6 +985,8 @@ def _render_markdown(
                 "ClamAV did not complete a clean scan.",
             ]
         )
+
+    lines.extend(_render_yara(report["analyzers"].get("yara")))
 
     capa = report["analyzers"]["capa"]
     capa_risk = capa.get("risk") or {}

@@ -185,11 +185,23 @@ clamav_version="$(
     --version
 )"
 
+yara_x_version="$(
+  docker run \
+    --rm \
+    --network none \
+    --entrypoint yr \
+    "$IMAGE_NAME" \
+    --version
+)"
+
 step "Setup complete"
 printf '%s\n' \
   "Analysis image: $IMAGE_NAME" \
   "ClamAV engine/signatures: $clamav_version" \
+  "YARA-X: $yara_x_version" \
   'Signatures expire after 7 days. Run this setup again to refresh them.' \
+  '' \
+  'Rule packs: .venv/bin/mantha-ray packs status' \
   '' \
   'Launch Mantha Ray with:' \
   '' \

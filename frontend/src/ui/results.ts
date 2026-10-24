@@ -100,12 +100,39 @@ function analyzerStatus(
     .replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function yaraDescription(data: JsonObject): string {
+  if (data.status === "unavailable") {
+    return "No rule packs installed (mantha-ray packs install)";
+  }
+  if (data.status === "error" || data.status === "not_run") {
+    return typeof data.error === "string" ? data.error : "See full report";
+  }
+  const counts = objectValue(data.severity_counts) ?? {};
+  const matched = typeof data.matched_files === "number" ? data.matched_files : 0;
+  const bundle = objectValue(data.bundle);
+  const version = typeof bundle?.version === "string"
+    ? ` · bundle ${bundle.version}${bundle.verified === true ? "" : " (unsigned)"}`
+    : "";
+  const found = matched === 0
+    ? "No rule matches"
+    : `${matched.toLocaleString()} file${matched === 1 ? "" : "s"} matched · `
+      + (["threat", "suspicious", "info"] as const)
+        .filter((s) => typeof counts[s] === "number" && (counts[s] as number) > 0)
+        .map((s) => `${(counts[s] as number).toLocaleString()} ${s}`)
+        .join(", ");
+  const issues = typeof data.error === "string" && data.error ? `; ${data.error}` : "";
+  return `${found}${version}${issues}`;
+}
+
 function analyzerDescription(
   data: JsonObject | null,
-  name: "clamav" | "capa" | "floss",
+  name: "clamav" | "yara" | "capa" | "floss",
 ): string {
   if (!data) {
-    return "See full report";
+    return name === "yara" ? "Not part of this scan (older case)" : "See full report";
+  }
+  if (name === "yara") {
+    return yaraDescription(data);
   }
   if (typeof data.error === "string" && data.error) {
     return data.error;
@@ -143,13 +170,14 @@ function analyzerDescription(
 }
 
 function setStage(
-  name: "clamav" | "capa" | "floss",
+  name: "clamav" | "yara" | "capa" | "floss",
   data: JsonObject | null,
 ): void {
-  const status = analyzerStatus(data);
+  const status = name === "yara" && !data ? "Not run" : analyzerStatus(data);
   const statusCell = element(`${name}-status`);
   statusCell.textContent = status;
   statusCell.className = data?.complete === false
+    && data.status !== "unavailable"
     ? "stage-warning"
     : "stage-good";
   element(`${name}-summary`).textContent =
@@ -168,13 +196,16 @@ function renderResult(state: ScanState): void {
   const report = result.report;
   const summary = objectValue(report.summary) ?? {};
   const clamav = analyzer(report, "clamav");
+  const yara = analyzer(report, "yara");
   const capa = analyzer(report, "capa");
   const floss = analyzer(report, "floss");
   element("metric-files").textContent =
   
     numberValue(summary.regular_files);
-  element("metric-hashed").textContent =
-    numberValue(summary.hashed_files);
+  element("metric-yara").textContent =
+    yara && yara.status !== "unavailable"
+      ? numberValue(yara.matched_files)
+      : "—";
   element("metric-capa").textContent = numberValue(
     capa?.capability_count ?? capa?.total_capabilities,
   );
@@ -185,6 +216,7 @@ function renderResult(state: ScanState): void {
   element("inventory-summary").textContent =
     `${numberValue(summary.hashed_files)} files hashed`;
   setStage("clamav", clamav);
+  setStage("yara", yara);
   setStage("capa", capa);
   setStage("floss", floss);
   const incompleteReasons = report.incomplete_reasons;

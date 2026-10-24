@@ -67,6 +67,13 @@ class ScanStartRequest(ResourceSelection):
     )
 
 
+class LocalRulesRequest(BaseModel):
+    filename: str = Field(min_length=1, max_length=255)
+    # The .yar file's text; the same limit as one rule file in a pack.
+    content: str = Field(min_length=1, max_length=8 * 1024 * 1024)
+    severity: Literal["info", "suspicious", "threat"] = "suspicious"
+
+
 class CaseHistoryRequest(BaseModel):
     results_directory: str = Field(
         min_length=1,
@@ -293,6 +300,49 @@ def create_app(
             payload.resource_profile,
             payload.resource_overrides,
         )
+
+    @app.get("/api/packs")
+    async def rule_packs(
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        return await asyncio.to_thread(service.rule_packs)
+
+    @app.post("/api/packs/local")
+    async def add_local_rules(
+        payload: LocalRulesRequest,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(
+                service.add_local_rules,
+                payload.filename,
+                payload.content,
+                payload.severity,
+            )
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
+    @app.delete("/api/packs/local/{name}")
+    async def remove_local_rules(
+        name: str,
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(
+                service.remove_local_rules,
+                name,
+            )
+        except HostScanError as exc:
+            raise api_error(exc) from exc
 
     @app.post("/api/dialogs/directory")
     async def directory_dialog(

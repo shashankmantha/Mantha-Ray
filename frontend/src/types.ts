@@ -3,6 +3,7 @@ export type JsonObject = Record<string, unknown>;
 export type StageName =
   | "inventory"
   | "clamav"
+  | "yara"
   | "capa"
   | "floss"
   | "report";
@@ -38,6 +39,7 @@ export type CoverageStatus =
 
 export type AnalyzerName =
   | "clamav"
+  | "yara"
   | "capa"
   | "floss";
 
@@ -68,6 +70,7 @@ export interface ArtifactDisplay {
   riskSource: ArtifactRiskSource;
   coverage: Record<AnalyzerName, CoverageStatus>;
   capaResult: JsonObject | null;
+  yaraResult: JsonObject | null;
 }
 
 export interface ArtifactTreeNode {

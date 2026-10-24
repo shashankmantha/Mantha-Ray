@@ -15,6 +15,8 @@ from .capa import CapaBatchResult, run_capa_batch
 from .clamav import ClamAVResult, run_clamav
 from .config import ScanConfig
 from .floss import FlossBatchResult, run_floss_batch
+from . import __version__
+from .yara_scan import PACKS_MOUNT, YaraBatchResult, run_yara_stage, summary_message
 from .inventory import inventory_tree
 from .models import ToolInfo
 from .preflight import inspect_tools
@@ -29,6 +31,7 @@ from .scan_record import (
 ScanStage = Literal[
     "inventory",
     "clamav",
+    "yara",
     "capa",
     "floss",
     "report",
@@ -108,8 +111,9 @@ def run_inventory_scan(
     *,
     on_progress: ProgressCallback | None = None,
     on_queue: StageQueueCallback | None = None,
+    packs_root: Path = PACKS_MOUNT,
 ) -> ScanResult:
-    """Run inventory, ClamAV, capa, and FLOSS analysis."""
+    """Run inventory, ClamAV, YARA-X, capa, and FLOSS analysis."""
 
     config.validate()
 
@@ -225,6 +229,83 @@ def run_inventory_scan(
                     "incomplete",
                     "ClamAV analysis was incomplete.",
                 )
+
+    yara_result: YaraBatchResult | None = None
+
+    yara_tool = _available_tool(
+        tools,
+        "yr",
+    )
+
+    if yara_tool is None:
+        _emit_progress(
+            on_progress,
+            "yara",
+            "unavailable",
+            "YARA-X is unavailable.",
+        )
+
+    else:
+        _emit_progress(
+            on_progress,
+            "yara",
+            "running",
+            "YARA-X is matching rule packs...",
+        )
+
+        try:
+            yara_result = run_yara_stage(
+                entries,
+                target,
+                executable=yara_tool.executable,
+                app_version=__version__,
+                packs_root=packs_root,
+                workers=config.limits.analysis_workers,
+                on_message=(
+                    lambda message: _emit_progress(
+                        on_progress,
+                        "yara",
+                        "running",
+                        message,
+                    )
+                ),
+            )
+        except (OSError, ValueError) as exc:
+            warnings.append(
+                "YARA-X could not start: "
+                f"{type(exc).__name__}: {exc}"
+            )
+
+            _emit_progress(
+                on_progress,
+                "yara",
+                "incomplete",
+                "YARA-X could not complete its scan.",
+            )
+
+        else:
+            if yara_result.status == "unavailable":
+                warnings.append(
+                    "No YARA rule packs are installed, so no YARA-X "
+                    "rules were matched. Install a bundle with "
+                    "`mantha-ray packs install`."
+                )
+            elif yara_result.bundle and not yara_result.bundle["verified"]:
+                warnings.append(
+                    "The installed YARA rule packs are unsigned "
+                    f"(bundle {yara_result.bundle['version']}); use them "
+                    "for testing only."
+                )
+            _emit_progress(
+                on_progress,
+                "yara",
+                {
+                    "completed": "completed",
+                    "incomplete": "incomplete",
+                    "unavailable": "unavailable",
+                }.get(yara_result.status, "error"),
+                summary_message(yara_result),
+            )
 
     capa_result: CapaBatchResult | None = None
 
@@ -450,6 +531,7 @@ def run_inventory_scan(
         warnings=warnings,
         capa_result=capa_result,
         floss_result=floss_result,
+        yara_result=yara_result,
         resources=(
             resources_record(
                 config.resource_profile,

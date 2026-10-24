@@ -94,7 +94,7 @@ def timings_line(report: dict[str, Any]) -> str:
     if not isinstance(timings, dict) or not timings:
         return "not recorded (older case)"
     parts = []
-    for stage in ("inventory", "clamav", "capa", "floss"):
+    for stage in ("inventory", "clamav", "yara", "capa", "floss"):
         record = timings.get(stage)
         if not isinstance(record, dict):
             continue
@@ -102,6 +102,28 @@ def timings_line(report: dict[str, Any]) -> str:
         shown = format_duration(seconds) if seconds is not None else "—"
         parts.append(f"{stage} {shown}")
     return " · ".join(parts)
+
+
+def yara_line(data: object) -> str:
+    if not isinstance(data, dict):
+        return "not part of this scan (older case)"
+    status = data.get("status")
+    if status == "unavailable":
+        return "no rule packs installed"
+    if status in ("not_run", "error"):
+        return clean(f"{status}: {data.get('error') or ''}", 160)
+    bundle = data.get("bundle") if isinstance(data.get("bundle"), dict) else {}
+    counts = data.get("severity_counts") if isinstance(data.get("severity_counts"), dict) else {}
+    found = ", ".join(
+        f"{_number(counts.get(s)) or 0:g} {s}" for s in ("threat", "suspicious", "info")
+        if _number(counts.get(s))
+    ) or "no matches"
+    signed = "" if bundle.get("verified") else ", unsigned"
+    return clean(
+        f"{status} · {data.get('scanned_files', 0)} files · {found}"
+        f" · bundle {bundle.get('version', '?')}{signed}",
+        200,
+    )
 
 
 def analyzer_lines(name: str, data: object) -> list[str]:
@@ -225,6 +247,7 @@ def summarize(case: Path) -> str:
         f"Timings  {timings_line(report)}",
         f"ClamAV   {clean(clamav.get('status', 'not recorded'), 20)}"
         + (f" · {len(findings)} detection(s)" if findings else ""),
+        f"YARA-X   {yara_line(analyzers.get('yara'))}",
         "",
         *analyzer_lines("capa", analyzers.get("capa")),
         "",

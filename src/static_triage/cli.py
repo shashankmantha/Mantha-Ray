@@ -113,6 +113,50 @@ def build_parser(
         help=argparse.SUPPRESS,
     )
 
+    packs = subparsers.add_parser(
+        "packs",
+        help="install and inspect YARA rule packs from Mantha Hermit",
+    )
+    packs_actions = packs.add_subparsers(dest="packs_command", required=True)
+    install = packs_actions.add_parser(
+        "install",
+        help="install a signed bundle (.tar.gz with its .minisig next to it)",
+    )
+    install.add_argument("bundle", type=Path)
+    install.add_argument(
+        "--unsigned",
+        action="store_true",
+        help="install an unsigned bundle folder, for testing only",
+    )
+    install.add_argument("--image", default="static-triage:core")
+    install.add_argument("--container-engine", default="docker")
+    packs_actions.add_parser("status", help="show the installed bundle and your own rules")
+    add = packs_actions.add_parser(
+        "add",
+        help="add your own .yar rule file; it runs in every scan",
+    )
+    add.add_argument("rule_file", type=Path)
+    add.add_argument("--name", default=None, help="name for these rules (default: from the file name)")
+    add.add_argument(
+        "--severity",
+        choices=("info", "suspicious", "threat"),
+        default="suspicious",
+        help="what a match means: suspicious (default) raises the case to Needs Review, "
+        "threat to High Concern, info only lists it",
+    )
+    add.add_argument("--replace", action="store_true", help="replace rules with the same name")
+    add.add_argument("--image", default="static-triage:core")
+    add.add_argument("--container-engine", default="docker")
+    remove = packs_actions.add_parser("remove", help="remove your own rules by name")
+    remove.add_argument("name")
+    packs_actions.add_parser(
+        "rollback",
+        help="go back to the previously installed bundle",
+    )
+
+    # Runs inside the scan image: compiles the bundle mounted at /packs.
+    subparsers.add_parser("packs-check", help=argparse.SUPPRESS)
+
     gui = subparsers.add_parser(
         "gui",
         help="launch the Tkinter interface",
@@ -376,6 +420,16 @@ def main(
 
     if args.command == "web":
         return _run_web(args)
+
+    if args.command == "packs":
+        from .packs.commands import run_packs_command
+
+        return run_packs_command(args)
+
+    if args.command == "packs-check":
+        from .packs.commands import run_packs_check
+
+        return run_packs_check()
 
     if args.command != "scan":
         return 2

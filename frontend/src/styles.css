@@ -460,6 +460,63 @@ h2 {
   color: #b7aaf6;
 }
 
+.rule-panel {
+  display: grid;
+  gap: 0.5rem;
+}
+
+.local-rules {
+  display: grid;
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.local-rules:empty {
+  display: none;
+}
+
+.local-rules li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  border: 1px solid #2a3863;
+  padding: 0.3rem 0.6rem;
+  background: #0e162e;
+  font-family: ui-monospace, monospace;
+  font-size: 0.78rem;
+  overflow-wrap: anywhere;
+}
+
+.local-rule-remove {
+  flex: none;
+  padding: 0;
+  color: #f2a7a7;
+  font-size: 0.75rem;
+}
+
+.local-rules-add {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.5rem;
+}
+
+#local-rule-message[data-kind="error"] {
+  color: #f2a7a7;
+}
+
+#local-rule-message[data-kind="ok"] {
+  color: #8fe0b0;
+}
+
+@media (max-width: 640px) {
+  .local-rules-add {
+    grid-template-columns: 1fr;
+  }
+}
+
 .resource-summary {
   margin: 0;
   color: #8693bd;
@@ -980,7 +1037,7 @@ h2 {
 
 .stage-tracker {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   padding: 0;
   margin: 0 0 1rem;
   border: 1px solid #2d3d6d;
@@ -1493,6 +1550,15 @@ h2 {
   margin: 0;
   font-size: 0.76rem;
   line-height: 1.5;
+}
+
+.artifact-detail-matches {
+  margin: 0.45rem 0 0;
+  padding-left: 1.1rem;
+  color: #f2c7c7;
+  font-family: ui-monospace, monospace;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
 }
 
 .artifact-detail-coverage {

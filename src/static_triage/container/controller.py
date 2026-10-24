@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from dataclasses import replace
 from typing import Callable
 from uuid import uuid4
 
@@ -17,6 +18,8 @@ from .command import (
     build_docker_command,
     validate_request,
 )
+from ..packs.local import has_local, local_root
+from ..packs.store import current_install_dir
 from ..resource_profiles import (
     ResourceProfile,
     ResourceProfileError,
@@ -244,6 +247,17 @@ class DockerScanController:
         ) = None,
     ) -> DockerScanResult:
         """Run a scan synchronously in a worker thread."""
+
+        if request.packs_directory is None:
+            request = replace(
+                request,
+                packs_directory=current_install_dir(),
+            )
+        if request.local_packs_directory is None and has_local():
+            request = replace(
+                request,
+                local_packs_directory=local_root(),
+            )
 
         validated = validate_request(
             request

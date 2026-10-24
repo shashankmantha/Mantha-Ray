@@ -23,6 +23,7 @@ import { showError } from "./shell";
 const stageOrder: readonly StageName[] = [
   "inventory",
   "clamav",
+  "yara",
   "capa",
   "floss",
   "report",
@@ -31,6 +32,7 @@ const stageOrder: readonly StageName[] = [
 const stageLabels: Record<StageName, string> = {
   inventory: "Inventory",
   clamav: "ClamAV",
+  yara: "YARA-X",
   capa: "capa",
   floss: "FLOSS",
   report: "Report",

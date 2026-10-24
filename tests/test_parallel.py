@@ -409,7 +409,7 @@ class ReportTests(unittest.TestCase):
             summary = summarize(result.case_directory)
 
         self.assertEqual(report["schema_version"], SCHEMA_VERSION)
-        self.assertEqual(SCHEMA_VERSION, "0.2.8")
+        self.assertEqual(SCHEMA_VERSION, "0.2.9")
         self.assertEqual(report["resources"]["workers"], 2)
         self.assertEqual(report["analyzers"]["capa"]["workers"], 2)
         self.assertIn("- Parallel analyses: 2", markdown)

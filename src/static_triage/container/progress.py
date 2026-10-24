@@ -9,6 +9,7 @@ PROGRESS_STAGES = frozenset(
     {
         "inventory",
         "clamav",
+        "yara",
         "capa",
         "floss",
         "report",

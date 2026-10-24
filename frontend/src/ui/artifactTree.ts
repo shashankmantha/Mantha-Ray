@@ -257,6 +257,9 @@ function analyzerLabel(name: AnalyzerName): string {
   if (name === "floss") {
     return "FLOSS";
   }
+  if (name === "yara") {
+    return "YARA-X";
+  }
   return "capa";
 }
 
@@ -265,6 +268,7 @@ function riskSourceLabel(
 ): string | null {
   switch (source) {
     case "clamav":
+    case "yara":
     case "capa":
     case "floss":
       return analyzerLabel(source);
@@ -334,11 +338,36 @@ function capaCapabilityNames(
   return names;
 }
 
+function yaraMatchLines(display: ArtifactDisplay): string[] {
+  const matches = display.yaraResult?.matches;
+  if (!Array.isArray(matches)) {
+    return [];
+  }
+  const lines: string[] = [];
+  for (const value of matches.slice(0, 5)) {
+    const match = objectValue(value);
+    if (!match || typeof match.rule !== "string") {
+      continue;
+    }
+    const description = typeof match.description === "string"
+      ? ` — ${match.description}`
+      : "";
+    lines.push(`${String(match.severity)}: ${String(match.pack)}/${match.rule}${description}`);
+  }
+  if (matches.length > 5) {
+    lines.push(`… and ${matches.length - 5} more`);
+  }
+  return lines;
+}
+
 function artifactAssessmentExplanation(
   display: ArtifactDisplay,
 ): string {
   if (display.riskSource === "clamav") {
     return "ClamAV reported a signature match for this file.";
+  }
+  if (display.riskSource === "yara") {
+    return "A YARA-X rule from the installed rule packs matched this file; the rule pack sets its severity.";
   }
   if (display.riskSource === "inventory") {
     return display.artifact.error
@@ -386,7 +415,19 @@ function createArtifactDetail(
   ).map(([name, status]) =>
     `${analyzerLabel(name)} ${coverageShortLabel(status)}`,
   ).join(" · ");
-  detail.append(heading, explanation, coverage);
+  detail.append(heading, explanation);
+  const yaraLines = yaraMatchLines(display);
+  if (yaraLines.length > 0) {
+    const list = document.createElement("ul");
+    list.className = "artifact-detail-matches";
+    for (const line of yaraLines) {
+      const item = document.createElement("li");
+      item.textContent = `YARA-X ${line}`;
+      list.append(item);
+    }
+    detail.append(list);
+  }
+  detail.append(coverage);
   if (display.artifact.sha256) {
     const hash = document.createElement("code");
     hash.className = "artifact-detail-hash";
@@ -531,6 +572,7 @@ function renderArtifactNode(
   if (node.artifact) {
     for (const analyzerName of [
       "clamav",
+      "yara",
       "capa",
       "floss",
     ] as const) {

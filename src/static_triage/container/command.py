@@ -34,6 +34,10 @@ class DockerScanRequest:
     resource_profile: ResourceProfile = field(
         default_factory=resolve_profile,
     )
+    # The installed rule pack folder, mounted read-only at /packs, and your
+    # own rule files (local packs), mounted read-only at /packs-local.
+    packs_directory: Path | None = None
+    local_packs_directory: Path | None = None
 
     @property
     def timeout_seconds(self) -> int:
@@ -137,12 +141,42 @@ def validate_request(
             "The scan has no valid resource profile."
         )
 
+    packs = _pack_folder(request.packs_directory, source, results)
+    local_packs = _pack_folder(request.local_packs_directory, source, results)
+
     return DockerScanRequest(
         source_directory=source,
         results_directory=results,
         image=request.image,
         resource_profile=request.resource_profile,
+        packs_directory=packs,
+        local_packs_directory=local_packs,
     )
+
+
+def _pack_folder(
+    folder: Path | None,
+    source: Path,
+    results: Path,
+) -> Path | None:
+    if folder is None:
+        return None
+    try:
+        folder = folder.expanduser().resolve(strict=True)
+    except OSError as exc:
+        raise HostScanError(
+            "The installed rule pack folder is missing."
+        ) from exc
+    if not folder.is_dir() or "," in str(folder):
+        raise HostScanError(
+            "The installed rule pack folder can't be mounted."
+        )
+    if _paths_overlap(folder, source) or _paths_overlap(folder, results):
+        raise HostScanError(
+            "The rule pack folder cannot overlap the scan "
+            "source or results."
+        )
+    return folder
 
 
 def _docker_size(mib: int) -> str:
@@ -206,6 +240,26 @@ def build_docker_command(
         source_mount,
         "--mount",
         results_mount,
+        *(
+            [
+                "--mount",
+                "type=bind,source="
+                f"{request.packs_directory},"
+                "target=/packs,readonly",
+            ]
+            if request.packs_directory is not None
+            else []
+        ),
+        *(
+            [
+                "--mount",
+                "type=bind,source="
+                f"{request.local_packs_directory},"
+                "target=/packs-local,readonly",
+            ]
+            if request.local_packs_directory is not None
+            else []
+        ),
         request.image,
         "scan",
         "input",

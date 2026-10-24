@@ -164,6 +164,55 @@ function analyzerCoverage(
     : "incomplete";
 }
 
+function yaraCoverage(
+  data: JsonObject | null,
+  fileResult: JsonObject | null,
+  regularFile: boolean,
+): CoverageStatus {
+  if (!regularFile) {
+    return "not-applicable";
+  }
+  if (!data || data.status === "unavailable") {
+    // No rule packs installed (or an older case): not a gap for this file.
+    return "not-applicable";
+  }
+  if (data.status === "not_run") {
+    return "unavailable";
+  }
+  if (data.status === "error") {
+    return "error";
+  }
+  if (fileResult) {
+    if (Array.isArray(fileResult.matches) && fileResult.matches.length > 0) {
+      return "finding";
+    }
+    return fileResult.complete === true ? "completed" : "incomplete";
+  }
+  // Clean files aren't listed; they count as scanned when the stage finished.
+  return data.complete === true ? "completed" : "incomplete";
+}
+
+const yaraSeverityRisk: Record<string, ArtifactRisk> = {
+  threat: "high",
+  suspicious: "medium",
+  info: "low",
+};
+
+function yaraMatchRisk(fileResult: JsonObject | null): ArtifactRisk | null {
+  if (!Array.isArray(fileResult?.matches)) {
+    return null;
+  }
+  let worst: ArtifactRisk | null = null;
+  for (const value of fileResult.matches) {
+    const severity = objectValue(value)?.severity;
+    const risk = typeof severity === "string" ? yaraSeverityRisk[severity] : undefined;
+    if (risk && (worst === null || riskRanks[risk] > riskRanks[worst])) {
+      worst = risk;
+    }
+  }
+  return worst;
+}
+
 function coverageHasGap(
   coverage: Record<AnalyzerName, CoverageStatus>,
 ): boolean {
@@ -273,8 +322,10 @@ export function artifactDisplayRecords(
   const artifacts = result.artifacts ?? [];
   const report = result.report;
   const clamav = analyzer(report, "clamav");
+  const yara = analyzer(report, "yara");
   const capa = analyzer(report, "capa");
   const floss = analyzer(report, "floss");
+  const yaraResults = analyzerResultMap(yara);
   const capaResults = analyzerResultMap(capa);
   const flossResults = analyzerResultMap(floss);
   // Files over FLOSS's size limit are not applicable, not a gap.
@@ -289,6 +340,8 @@ export function artifactDisplayRecords(
     const relativePath = artifact.relative_path;
     const capaResult =
       capaResults.get(relativePath) ?? null;
+    const yaraResult =
+      yaraResults.get(relativePath) ?? null;
     const flossResult =
       flossResults.get(relativePath) ?? null;
     const hasClamavFinding = clamavHasFinding(
@@ -327,6 +380,7 @@ export function artifactDisplayRecords(
     }
     const coverage: Record<AnalyzerName, CoverageStatus> = {
       clamav: clamavCoverage,
+      yara: yaraCoverage(yara, yaraResult, regularFile),
       capa: analyzerCoverage(
         capa,
         capaResult,
@@ -338,18 +392,23 @@ export function artifactDisplayRecords(
         regularFile && flossEligible,
       ),
     };
-    const assessment = artifactAssessment(
+    const base = artifactAssessment(
       artifact,
       hasClamavFinding,
       capaResult,
       coverage,
     );
+    const yaraRisk = yaraMatchRisk(yaraResult);
+    const assessment = yaraRisk && riskRanks[yaraRisk] > riskRanks[base.risk]
+      ? { risk: yaraRisk, source: "yara" as const }
+      : base;
     return {
       artifact,
       risk: assessment.risk,
       riskSource: assessment.source,
       coverage,
       capaResult,
+      yaraResult,
     };
   });
 }

@@ -3,6 +3,7 @@ import "./styles.css";
 
 import { api } from "./api";
 import { loadHistory, openCase, selectSession } from "./history";
+import { configureRulePacks, loadRulePacks } from "./ui/rulePacks";
 import { createScanController } from "./scanController";
 import { configureArtifactTreePopout } from "./ui/artifactTree";
 import {
@@ -173,6 +174,8 @@ async function initialize(): Promise<void> {
   try {
     await establishSession();
     await loadConfiguration();
+    configureRulePacks();
+    void loadRulePacks();
     try {
       await loadHistory();
     } catch (error) {

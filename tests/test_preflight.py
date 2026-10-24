@@ -38,7 +38,7 @@ class PreflightTests(unittest.TestCase):
 
         tools = inspect_tools()
 
-        self.assertEqual(len(tools), 3)
+        self.assertEqual(len(tools), 4)
         self.assertTrue(
             all(not tool.available for tool in tools)
         )
@@ -74,7 +74,7 @@ class PreflightTests(unittest.TestCase):
 
         tools = inspect_tools()
 
-        self.assertEqual(len(tools), 3)
+        self.assertEqual(len(tools), 4)
         self.assertTrue(
             all(tool.available for tool in tools)
         )

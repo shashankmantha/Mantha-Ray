@@ -12,6 +12,7 @@ TOOL_VERSION_ARGUMENTS: dict[str, tuple[str, ...]] = {
     "clamscan": ("--version",),
     "capa": ("--version",),
     "floss": ("--version",),
+    "yr": ("--version",),
 }
 
 

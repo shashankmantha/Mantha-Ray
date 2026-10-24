@@ -77,6 +77,27 @@ RUN apk add --no-cache \
     && apk del .analysis-build-deps
 
 
+# YARA-X command-line scanner. The release binary is fully static, so it runs
+# on this Alpine (musl) image; the archive is checked against a pinned hash.
+# Hermit pins the same version for the rule bundles it builds.
+ARG YARA_X_VERSION=1.22.0
+ARG YARA_X_SHA256=7f470770b2c1a0d97f02298fc194978d999074d147d003d33dd62775761439db
+RUN apk add --no-cache --virtual .yara-x-fetch curl \
+    && curl \
+        --fail \
+        --silent \
+        --show-error \
+        --location \
+        "https://github.com/VirusTotal/yara-x/releases/download/v${YARA_X_VERSION}/yara-x-v${YARA_X_VERSION}-x86_64-unknown-linux-gnu.tar.gz" \
+        --output /tmp/yara-x.tar.gz \
+    && echo "${YARA_X_SHA256}  /tmp/yara-x.tar.gz" | sha256sum -c - \
+    && tar -xzf /tmp/yara-x.tar.gz -C /usr/local/bin yr \
+    && chmod 0755 /usr/local/bin/yr \
+    && rm -f /tmp/yara-x.tar.gz \
+    && /usr/local/bin/yr --version \
+    && apk del .yara-x-fetch
+
+
 ARG CLAMAV_DB_REFRESH=unset
 RUN printf 'Refreshing ClamAV signatures (%s)\n' "${CLAMAV_DB_REFRESH}" \
     && freshclam

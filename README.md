@@ -26,7 +26,7 @@ It inventories files, calculates hashes, scans for known signatures with ClamAV,
 
 ## Analysis pipeline
 
-Mantha Ray processes a selected folder through five stages:
+Mantha Ray processes a selected folder through six stages:
 
 1. **Inventory**
    - Walks the directory tree
@@ -36,14 +36,18 @@ Mantha Ray processes a selected folder through five stages:
 2. **ClamAV**
    - Scans files against the signatures included in the analysis image
    - Reports known detections and scan errors
-3. **capa**
+3. **YARA-X**
+   - Matches every file against the installed rule packs from [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit)
+   - Each rule's severity comes from its pack: `threat`, `suspicious` or `info`
+   - Skipped (not a coverage gap) when no rule packs are installed
+4. **capa**
    - Analyzes supported PE and ELF binaries
    - Identifies capabilities such as process manipulation, networking, persistence, and cryptography
    - Assigns weighted risk based on capability type and supporting evidence
-4. **FLOSS**
+5. **FLOSS**
    - Extracts static, stack, tight, and decoded strings from eligible PE files
    - Does not run against unsupported file types such as ELF binaries
-5. **Report**
+6. **Report**
    - Produces machine-readable and human-readable case artifacts
    - Records incomplete stages and coverage gaps
 
@@ -332,7 +336,7 @@ For very large applications, consider scanning suspicious installers, launchers,
 | --- | --- |
 | **No Indicators Detected** | All configured stages completed without a signature detection or review-level static indicator. This does not prove the files are safe. |
 | **Needs Review** | Static evidence crossed the review threshold or otherwise requires manual inspection. |
-| **High Concern** | Stronger capability combinations or other high-risk evidence were identified. |
+| **High Concern** | A YARA-X rule with `threat` severity matched (this applies even if other stages didn't finish), or stronger capability combinations or other high-risk evidence were identified. |
 | **Known Detection** | ClamAV reported a known signature match. |
 | **Incomplete** | One or more stages failed, timed out, were unavailable, or exceeded configured limits. |
 
@@ -435,6 +439,52 @@ docker run --rm \
   --version
 ```
 
+## Rule packs (YARA-X)
+
+YARA rules come in signed bundles built by [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit). Mantha Ray checks them against bundle contract v1 before anything is used.
+
+```bash
+.venv/bin/mantha-ray packs install mantha-packs-2026.10.25.1.tar.gz   # .minisig must sit next to it
+.venv/bin/mantha-ray packs status
+.venv/bin/mantha-ray packs rollback                                    # back to the previous install
+```
+
+What `packs install` checks, in order:
+
+1. The minisign signature, against the release public key at `src/static_triage/packs/minisign.pub`.
+2. The signed comment, matched exactly: `mantha-packs <version> sha256:<hash>`.
+3. The archive's SHA-256 against the signed hash.
+4. That the bundle isn't older than one already installed. A downloaded bundle can never roll you back; only `packs rollback` can.
+5. A safe unpack: plain files only, no links, no paths outside the folder, with size limits.
+6. The manifest, pack hashes, `pack.json` and `severities.json`. Every rule must compile, which is checked in the scan container, with no network, by the image's own YARA-X.
+7. The bundle's minimum Mantha Ray version.
+
+If any check fails, nothing changes and the current packs stay in use.
+
+Installed packs live in `~/.local/share/mantha-ray/packs`, outside the repository. Each scan mounts them read-only at `/packs`.
+
+For testing, `packs install --unsigned FOLDER` installs a folder from `hermit export-bundle --unsigned`. Reports label those packs **unsigned**.
+
+### Your own rules
+
+You can add your own `.yar` files without Hermit. In the window, use **YARA rules → Add your rules** on the scan setup screen. From a terminal:
+
+```bash
+.venv/bin/mantha-ray packs add my_rules.yar                     # a match means Needs Review
+.venv/bin/mantha-ray packs add miners.yar --severity threat     # a match means High Concern
+.venv/bin/mantha-ray packs add notes.yar --severity info        # matches are listed only
+.venv/bin/mantha-ray packs remove my-rules
+```
+
+- **How it's stored.** Each file becomes a `local:<name>` pack in `~/.local/share/mantha-ray/packs/local`, named after the file.
+- **Checked first.** Rules must compile (checked in the scan container) before they're kept.
+- **Supported:** modules such as `import "pe"`, and the `filename`, `filepath` and `extension` externals.
+- **Not supported:** `include`. Put everything a file needs into that one file.
+- **Kept apart from the signed packs.** Your rules run in every scan beside the signed packs, are labelled as your own in reports, and are never changed by bundle installs or rollbacks.
+- **Limits:** up to 50 files, 8 MiB each.
+
+**Release key.** Make the key once with `hermit keygen`. It asks for a password: the key can push rules to every install, so it is never stored without one. Copy the public half to `src/static_triage/packs/minisign.pub`, and keep the secret key off the repository, with an offline backup.
+
 ## Stopping a scan
 
 In the window, **Stop scan…** asks for confirmation; hold **Stop and save report** for two seconds. The analyses in progress are ended and a report of the work finished so far is saved (files not analyzed yet are listed as not reached). **Discard the scan instead**, also hold-to-confirm, ends it at once and saves nothing.
@@ -513,6 +563,8 @@ malware-scanner/
 │       ├── clamav.py
 │       ├── capa.py
 │       ├── floss.py
+│       ├── yara_scan.py
+│       ├── packs/           # rule pack contract, signatures, install store
 │       ├── reporting.py
 │       ├── host_scan.py
 │       ├── web_api.py
@@ -686,7 +738,7 @@ Planned work includes:
 - Improved large-tree navigation and filtering
 - Prebuilt release packages
 - Automatically refreshed analysis images
-- Optional YARA support
+- Automatic rule pack updates (download, verify, install)
 - Future emulation and sandbox integrations
 - Final retro-inspired interface and color-system pass
 

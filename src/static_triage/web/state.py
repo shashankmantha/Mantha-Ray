@@ -23,6 +23,7 @@ TERMINAL_STATES = {
 SCAN_STAGE_NAMES = (
     "inventory",
     "clamav",
+    "yara",
     "capa",
     "floss",
     "report",
@@ -70,15 +71,17 @@ def stages_from_report(
     analyzers = report.get("analyzers")
 
     if isinstance(analyzers, dict):
-        for name in ("clamav", "capa", "floss"):
+        for name in ("clamav", "yara", "capa", "floss"):
             analyzer = analyzers.get(name)
 
             if not isinstance(analyzer, dict):
+                if name == "yara":
+                    stages[name] = "unavailable"  # older case
                 continue
 
             analyzer_status = analyzer.get("status")
 
-            if analyzer_status == "not_run":
+            if analyzer_status in ("not_run", "unavailable"):
                 stages[name] = "unavailable"
             elif analyzer_status == "error":
                 stages[name] = "error"

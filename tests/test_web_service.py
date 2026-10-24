@@ -289,6 +289,7 @@ class WebScanServiceTests(unittest.TestCase):
                 {
                     "inventory": "completed",
                     "clamav": "completed",
+                    "yara": "unavailable",
                     "capa": "completed",
                     "floss": "completed",
                     "report": "completed",
