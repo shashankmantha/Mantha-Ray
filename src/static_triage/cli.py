@@ -131,6 +131,13 @@ def build_parser(
     install.add_argument("--image", default="static-triage:core")
     install.add_argument("--container-engine", default="docker")
     packs_actions.add_parser("status", help="show the installed bundle and your own rules")
+    update = packs_actions.add_parser(
+        "update",
+        help="download and install the latest signed bundle from Mantha Hermit's releases",
+    )
+    update.add_argument("--check", action="store_true", help="only say whether there's a newer bundle")
+    update.add_argument("--image", default="static-triage:core")
+    update.add_argument("--container-engine", default="docker")
     add = packs_actions.add_parser(
         "add",
         help="add your own .yar rule file; it runs in every scan",

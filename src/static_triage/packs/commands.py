@@ -7,7 +7,7 @@ import tempfile
 from pathlib import Path
 
 from .. import __version__
-from . import local, store
+from . import local, store, update
 from .check import container_compile_check
 
 
@@ -15,6 +15,15 @@ def _print_installed(installed: store.Installed) -> None:
     kind = "signed" if installed.verified else "UNSIGNED (testing only)"
     print(f"Installed bundle {installed.version} ({kind}).")
     print(f"  {installed.directory}")
+
+
+def _update_line(status: update.UpdateCheck) -> str:
+    if status.older_than_installed:
+        return (f"The latest release ({status.latest}) is older than a bundle already "
+                "installed, so it won't be used.")
+    if status.update_available:
+        return f"A newer bundle is available: {status.latest} (installed: {status.installed or 'none'})."
+    return f"Up to date: {status.latest}."
 
 
 def run_packs_command(args: argparse.Namespace) -> int:
@@ -32,6 +41,27 @@ def run_packs_command(args: argparse.Namespace) -> int:
             else:
                 installed = store.install_signed(args.bundle, compile_check=check)
             _print_installed(installed)
+            return 0
+
+        if args.packs_command == "update":
+            print(f"Checking {update.release_repo()} for a newer signed bundle...")
+            if args.check:
+                status, _ = update.check()
+                print(_update_line(status))
+                return 0
+
+            def check_update(staging: Path) -> dict:
+                print("Checking that every rule compiles (in the scan container)...")
+                return container_compile_check(
+                    staging, image=args.image, engine=args.container_engine,
+                )
+
+            status, installed = update.update(compile_check=check_update)
+            if installed is None:
+                print(_update_line(status))
+            else:
+                print(f"Updated from {status.installed or 'nothing'} to {installed.version}.")
+                _print_installed(installed)
             return 0
 
         if args.packs_command == "add":

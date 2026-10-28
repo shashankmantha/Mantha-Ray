@@ -465,6 +465,18 @@ h2 {
   gap: 0.5rem;
 }
 
+.rule-bundle-line {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.rule-update {
+  padding: 0;
+  font-size: 0.75rem;
+}
+
 .local-rules {
   display: grid;
   gap: 0.25rem;

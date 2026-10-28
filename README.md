@@ -447,7 +447,11 @@ YARA rules come in signed bundles built by [Mantha Hermit](https://github.com/sh
 .venv/bin/mantha-ray packs install mantha-packs-2026.10.25.1.tar.gz   # .minisig must sit next to it
 .venv/bin/mantha-ray packs status
 .venv/bin/mantha-ray packs rollback                                    # back to the previous install
+.venv/bin/mantha-ray packs update                                      # install the latest signed release
+.venv/bin/mantha-ray packs update --check                              # only say whether there's one
 ```
+
+`packs update` downloads the newest release from [mantha-packs](https://github.com/shashankmantha/mantha-packs), where Hermit publishes signed bundles, and installs it with every check below. Downloads happen on the host only, over HTTPS from GitHub; scan containers never get network access. The **YARA rules** panel in the window has the same **Check for updates** button.
 
 What `packs install` checks, in order:
 

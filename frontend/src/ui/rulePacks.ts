@@ -37,6 +37,7 @@ const localList = element<HTMLUListElement>("local-rules");
 const fileInput = element<HTMLInputElement>("local-rule-file");
 const severityInput = element<HTMLSelectElement>("local-rule-severity");
 const addButton = element<HTMLButtonElement>("local-rule-add");
+const updateButton = element<HTMLButtonElement>("rule-update");
 const message = element<HTMLParagraphElement>("local-rule-message");
 
 function setMessage(text: string, kind: "info" | "error" | "ok" = "info"): void {
@@ -136,6 +137,24 @@ async function addRules(): Promise<void> {
   }
 }
 
+async function updatePacks(): Promise<void> {
+  updateButton.disabled = true;
+  setMessage("Checking Mantha Hermit's releases for a newer signed bundle...");
+  try {
+    const result = await api<RulePacks & { message: string; updated: boolean }>(
+      "/api/packs/update",
+      { method: "POST" },
+    );
+    render(result);
+    setMessage(result.message, result.updated ? "ok" : "info");
+  } catch (error) {
+    setMessage(error instanceof Error ? error.message : String(error), "error");
+  } finally {
+    updateButton.disabled = false;
+  }
+}
+
 export function configureRulePacks(): void {
   addButton.addEventListener("click", () => void addRules());
+  updateButton.addEventListener("click", () => void updatePacks());
 }

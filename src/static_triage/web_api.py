@@ -328,6 +328,18 @@ def create_app(
         except HostScanError as exc:
             raise api_error(exc) from exc
 
+    @app.post("/api/packs/update")
+    async def update_rule_packs(
+        _: Annotated[
+            None,
+            Depends(require_session),
+        ],
+    ) -> dict[str, object]:
+        try:
+            return await asyncio.to_thread(service.update_rule_packs)
+        except HostScanError as exc:
+            raise api_error(exc) from exc
+
     @app.delete("/api/packs/local/{name}")
     async def remove_local_rules(
         name: str,

@@ -136,6 +136,31 @@ class ScanService:
             raise HostScanError(str(exc)) from exc
         return {"added": added, **self.rule_packs()}
 
+    def update_rule_packs(self) -> dict[str, Any]:
+        """Install the latest signed bundle from Hermit's releases if it's newer."""
+
+        from ..packs import store, update
+        from ..packs.check import container_compile_check
+
+        engine = getattr(self.controller, "engine", "docker")
+        image = getattr(self.controller, "image", "static-triage:core")
+        try:
+            status, installed = update.update(
+                compile_check=lambda staging: container_compile_check(
+                    staging, image=image, engine=engine,
+                ),
+            )
+        except store.PackInstallError as exc:
+            raise HostScanError(str(exc)) from exc
+        if installed is not None:
+            message = f"Updated to bundle {installed.version}."
+        elif status.older_than_installed:
+            message = (f"The latest release ({status.latest}) is older than a bundle "
+                       "already installed, so it wasn't used.")
+        else:
+            message = f"Rule packs are up to date ({status.latest})."
+        return {"message": message, "updated": installed is not None, **self.rule_packs()}
+
     def remove_local_rules(self, name: str) -> dict[str, Any]:
         from ..packs import local, store
 
