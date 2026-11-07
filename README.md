@@ -1,755 +1,249 @@
 # Mantha Ray
 
-Mantha Ray is a local static malware-triage application for inspecting suspicious folders without executing their contents.
+Mantha Ray is a local static malware-triage tool for Linux. Point it at a suspicious folder, such as a cracked game or a download you don't trust, and it tells you which files deserve a closer look, without ever running them.
 
-It inventories files, calculates hashes, scans for known signatures with ClamAV, identifies executable capabilities with capa, and extracts strings from eligible Windows executables with FLOSS. Analysis runs inside a hardened, network-disabled Docker container, while a local web interface presents live progress, saved scans, reports, and per-file results.
+Every file is inventoried and hashed, then checked by ClamAV signatures, YARA-X rule packs, capa capability analysis and FLOSS string extraction. All analysis runs in a hardened Docker container with no network access. A local web interface shows live progress, a file tree with per-file results, and saved reports.
 
-> Static analysis can identify useful indicators, but it cannot prove that a file is safe.
+> Static analysis can find strong evidence that something is wrong. It can never prove that a file is safe.
 
-## Features
+## Highlights
 
-- Local browser-based interface
-- Persistent scan history
-- Live analysis-stage tracker and activity console
-- Expandable artifact and directory tree
-- Per-file analyzer coverage
-- Weighted capa risk scoring
-- ClamAV signature detection
-- FLOSS string extraction for eligible PE files
-- SHA-256 hashing and file inventory
-- Markdown and JSON reports
-- Raw analyzer output retention
-- Scan cancellation
-- Read-only source mounting
-- Network-disabled analysis
-- Resource-limited Docker execution
+- **Six-stage static pipeline:** inventory, ClamAV, YARA-X, capa, FLOSS, report.
+- **Isolated analysis:** a network-less, read-only container with no Linux capabilities, resource limits and a read-only view of the sample.
+- **Signed rule packs:** YARA rules come from [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit) as minisign-signed bundles, with rollback protection. Each rule is compiled in the sandbox before it's trusted. You can also add your own `.yar` files.
+- **Built for big folders:**
+  - files analyzed in parallel, smallest first;
+  - scheduling around the container's memory, so a memory-hungry file runs alone;
+  - identical files analyzed once;
+  - per-file timeouts that grow with size;
+  - a fast plain-strings pass for files too big for FLOSS.
+- **Honest coverage:** files that weren't reached, timed out or ran out of memory are reported as gaps, never as clean.
+- **Live interface:**
+  - stage tracker and activity console;
+  - a terminal-style queue showing which file is being analyzed;
+  - file tree with per-analyzer badges;
+  - saved scan history;
+  - a stop button that keeps a report of the finished work.
+- **Reports:** Markdown and JSON reports, raw tool output, and a short `summary.sh` view.
 
-## Analysis pipeline
+## How it works
 
-Mantha Ray processes a selected folder through six stages:
-
-1. **Inventory**
-   - Walks the directory tree
-   - Records file type, size, permissions, and routing class
-   - Calculates SHA-256 hashes
-   - Enforces file-count, size, and depth limits
-2. **ClamAV**
-   - Scans files against the signatures included in the analysis image
-   - Reports known detections and scan errors
-3. **YARA-X**
-   - Matches every file against the installed rule packs from [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit)
-   - Each rule's severity comes from its pack: `threat`, `suspicious` or `info`
-   - Skipped (not a coverage gap) when no rule packs are installed
-4. **capa**
-   - Analyzes supported PE and ELF binaries
-   - Identifies capabilities such as process manipulation, networking, persistence, and cryptography
-   - Assigns weighted risk based on capability type and supporting evidence
-5. **FLOSS**
-   - Extracts static, stack, tight, and decoded strings from eligible PE files
-   - Does not run against unsupported file types such as ELF binaries
-6. **Report**
-   - Produces machine-readable and human-readable case artifacts
-   - Records incomplete stages and coverage gaps
-
-## Safety model
-
-Mantha Ray is designed to inspect files without executing them.
-
-The analysis container is launched with:
-
-- Networking disabled
-- A read-only container filesystem
-- The selected input folder mounted read-only
-- Linux capabilities dropped
-- `no-new-privileges` enabled
-- CPU, memory, and process limits
-- A bounded temporary filesystem mounted with `noexec`
-- Results written to a separate output directory
-
-The source folder and results folder cannot overlap.
-
-These controls reduce risk, but they do not make hostile files harmless. Docker relies on the host kernel and should not be treated as a perfect security boundary. Analyze untrusted material inside a dedicated, disposable VM whenever possible.
-
-For higher-risk samples:
-
-- Disable the VM network adapter at the hypervisor
-- Disable shared folders, clipboard sharing, and drag-and-drop
-- Take a clean VM snapshot first
-- Do not launch samples through Wine or another runtime
-- Do not treat a clean static report as authorization to execute a file
-
-## Requirements
-
-Mantha Ray currently targets Linux.
-
-Required software:
-
-- Git
-- Python 3
-- Python virtual-environment support
-- Tkinter
-- Docker Engine and the Docker CLI
-
-Node.js and npm are only required when modifying or rebuilding the frontend. The repository includes compiled frontend assets for normal installation.
-
-### Fedora and Nobara
-
-Install the required system packages:
-
-```bash
-sudo dnf install \
-  git \
-  python3 \
-  python3-pip \
-  python3-tkinter \
-  docker-cli \
-  moby-engine
+```mermaid
+flowchart TB
+    Hermit["Mantha Hermit<br/>curates YARA rules"] -- "signed bundle (GitHub release)" --> Verify["packs update<br/>signature, version, contract, compile in sandbox"]
+    subgraph Host["Your machine (no root needed)"]
+        UI["Web interface<br/>loopback only, session token"]
+        Store["Rule packs"]
+    end
+    Verify --> Store
+    Sample[("Sample folder<br/>read-only")]
+    subgraph Box["Analysis container: no network, read-only, no capabilities"]
+        direction LR
+        Inv["Inventory<br/>+ SHA-256"] --> Clam["ClamAV"] --> Yara["YARA-X"] --> Capa["capa"] --> Floss["FLOSS"] --> Report["Report"]
+    end
+    UI -- "starts, watches, stops" --> Box
+    Sample --> Inv
+    Store -- "read-only" --> Yara
+    Report --> Results[("Case folder<br/>report.md, report.json")]
 ```
 
-Start Docker and enable it at boot:
+| Stage | What it does |
+| --- | --- |
+| **Inventory** | Walks the folder safely (no symlink following, bounded depth and size), records type, size and permissions, and hashes every file with SHA-256. |
+| **ClamAV** | Known-malware signatures, with a signature database that must be less than 7 days old. |
+| **YARA-X** | Every file against the installed rule packs. Each rule's severity (`threat`, `suspicious` or `info`) comes from its pack. Skipped, not counted as a gap, when no packs are installed. |
+| **capa** | What PE and ELF programs can do: injection, persistence, networking, anti-analysis and so on, with weighted risk scoring. |
+| **FLOSS** | Stack, tight and decoded strings from Windows programs up to 4 MiB. Bigger files get a fast plain-strings pass filtered for URLs, mining pools, commands, credential paths and similar. |
+| **Report** | A verdict, per-file results, coverage gaps, stage timings and resource use. |
 
-```bash
-sudo systemctl enable --now docker
-```
+### Verdicts
 
-Add the current user to the Docker group:
+| Status | Meaning |
+| --- | --- |
+| **Known Detection** | ClamAV matched a known malware signature. |
+| **High Concern** | A YARA-X `threat` rule matched (this applies even if other stages didn't finish), or capa found a high-risk combination of capabilities. |
+| **Needs Review** | A YARA-X `suspicious` rule matched, or capa or the inventory found evidence that needs a person to look. |
+| **No Indicators Detected** | Every stage finished and found nothing. This does not prove the files are safe. |
+| **Incomplete** | A stage failed, timed out or didn't reach every file. |
 
-```bash
-sudo usermod -aG docker "$USER"
-```
+## Security design
 
-Log out and back in before continuing so the new group membership takes effect.
+- **The sample is never executed.** Every analyzer is static.
+- **The container:**
+  - `--network none`, a read-only root filesystem, every Linux capability dropped, and `no-new-privileges`;
+  - a non-root user, with CPU, memory and process limits;
+  - a `noexec` temporary filesystem;
+  - the sample mounted read-only.
+- **No overlaps:** the source, results and rule pack folders can't overlap.
+- **The web interface** listens on loopback only, needs a per-launch session token, and checks the request origin. It sends a strict Content Security Policy, and puts filenames and strings from samples into the page as text, never as HTML.
+- **Rule packs are untrusted until proven otherwise.** An install or update:
+  1. verifies the minisign signature against the release key in this repository;
+  2. matches the signed `mantha-packs <version> sha256:<hash>` comment exactly;
+  3. checks the archive hash;
+  4. refuses anything older than a bundle already installed (rollback protection);
+  5. unpacks with no links, no path escapes and size limits;
+  6. validates every manifest and pack hash;
+  7. compiles every rule inside the network-less container with the image's own YARA-X.
 
-### Ubuntu and Debian
+  If any step fails, nothing changes. Only the host downloads; scan containers never get network access.
+- **Stopping a scan** needs a two-second hold to confirm (or typing `stop` in the terminal script), so it can't happen by accident.
 
-Install the required system packages:
+Docker shares the host kernel and is not a perfect security boundary. Analyze untrusted material inside a dedicated, disposable VM with networking, shared folders and clipboard sharing turned off. Never treat a clean report as permission to run a file.
 
-```bash
-sudo apt update
-sudo apt install \
-  git \
-  python3 \
-  python3-venv \
-  python3-pip \
-  python3-tk \
-  docker.io
-```
+## Quick start
 
-Start Docker and enable it at boot:
-
-```bash
-sudo systemctl enable --now docker
-```
-
-Add the current user to the Docker group:
-
-```bash
-sudo usermod -aG docker "$USER"
-```
-
-Log out and back in before continuing.
-
-### Arch Linux
-
-Install the required system packages:
-
-```bash
-sudo pacman -S --needed \
-  git \
-  python \
-  python-pip \
-  tk \
-  docker
-```
-
-Start Docker and enable it at boot:
-
-```bash
-sudo systemctl enable --now docker
-```
-
-Add the current user to the Docker group:
-
-```bash
-sudo usermod -aG docker "$USER"
-```
-
-Log out and back in before continuing.
-
-### Verify the prerequisites
-
-From the repository root, run:
-
-```bash
-./scripts/check-requirements.sh
-```
-
-You can also verify Docker access directly:
-
-```bash
-docker info
-docker run --rm hello-world
-```
-
-Do not run Mantha Ray with `sudo`. The application expects the current user to have direct access to Docker.
-
-Access to the Docker daemon is security-sensitive. Membership in the Docker group is effectively equivalent to elevated host access.
-
-## Installation from source
-
-Clone the repository:
+Requirements: Linux on x86-64, Git, Python 3.11.4 or newer with `venv`, and Docker you can use without `sudo`. Per-distribution commands are in [docs/installation.md](docs/installation.md).
 
 ```bash
 git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
 cd malware-scanner
-```
-
-Check the host requirements:
-
-```bash
 ./scripts/check-requirements.sh
-```
-
-Run the setup workflow:
-
-```bash
 ./scripts/setup.sh
-```
-
-The setup script creates the repository-local Python virtual environment and installs Mantha Ray with its required host-side dependencies. Normal users do not need to activate the virtual environment manually.
-
-Confirm that the installation and bundled frontend are present:
-
-```bash
-test -x .venv/bin/mantha-ray
-test -f src/static_triage/web_dist/index.html
-```
-
-Build the analysis image:
-
-```bash
-docker build \
-  --pull \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
-```
-
-The initial image build requires an internet connection and may take several minutes. It installs ClamAV, capa, FLOSS, their supporting rules, and the current ClamAV signature database.
-
-Verify the analysis image:
-
-```bash
-docker run --rm \
-  --network none \
-  static-triage:core \
-  scan --help
-```
-
-The scanner help should include:
-
-```text
---progress-jsonl
-```
-
-Check the bundled ClamAV engine and database version:
-
-```bash
-docker run --rm \
-  --network none \
-  --entrypoint clamscan \
-  static-triage:core \
-  --version
-```
-
-After the image has been built, Mantha Ray runs analysis containers with networking disabled.
-
-### Frontend development
-
-This section is only necessary when changing files under `frontend/`.
-
-Install Node.js and npm using the package manager for your distribution, then let the setup workflow install and build the frontend:
-
-```bash
-./scripts/setup.sh --build-frontend
-```
-
-Alternatively, build it directly:
-
-```bash
-cd frontend
-npm ci
-npm run build
-cd ..
-```
-
-The production application uses the compiled assets stored under:
-
-```text
-src/static_triage/web_dist/
-```
-
-## Running Mantha Ray
-
-From the repository root, launch Mantha Ray with:
-
-```bash
 ./mantha-ray.sh
 ```
 
-The launcher automatically uses the repository's virtual environment. Manual activation is not required.
+`setup.sh` does the following:
+- creates `.venv` and installs Mantha Ray;
+- builds the analysis image, which downloads ClamAV signatures, capa and its rules, FLOSS, and the YARA-X scanner (checked against a pinned hash). This needs internet access and takes several minutes the first time;
+- checks the image and prints the tool versions.
 
-Mantha Ray starts an authenticated loopback web service and opens the interface in the default browser.
+Run it again at least weekly to refresh ClamAV signatures; it reuses everything else.
 
-Advanced command-line options remain available through the virtual-environment executable. For example:
-
-```bash
-.venv/bin/mantha-ray web --no-browser
-.venv/bin/mantha-ray web --port 8080
-```
-
-## Starting a scan
-
-1. Select **New scan**.
-2. Choose the folder containing the files to inspect.
-3. Choose a separate results directory.
-4. Select **Start secure scan**.
-5. Monitor the stage tracker and live Activity console.
-6. Pause or resume auto-scroll as needed, or copy the activity log.
-7. Review the artifact tree and completed report.
-
-The default results location is:
-
-```text
-~/mantha-ray-results
-```
-
-Do not place the results directory inside the scanned folder or the scanned folder inside the results directory.
-
-For very large applications, consider scanning suspicious installers, launchers, crack directories, DLLs, or executable folders first. Full game or application directories may contain tens of thousands of files and can take significantly longer.
-
-## Understanding results
-
-### Overall case status
-
-| Status | Meaning |
-| --- | --- |
-| **No Indicators Detected** | All configured stages completed without a signature detection or review-level static indicator. This does not prove the files are safe. |
-| **Needs Review** | Static evidence crossed the review threshold or otherwise requires manual inspection. |
-| **High Concern** | A YARA-X rule with `threat` severity matched (this applies even if other stages didn't finish), or stronger capability combinations or other high-risk evidence were identified. |
-| **Known Detection** | ClamAV reported a known signature match. |
-| **Incomplete** | One or more stages failed, timed out, were unavailable, or exceeded configured limits. |
-
-### Artifact risk
-
-| Risk | Meaning |
-| --- | --- |
-| **Clean** | No mapped file-level indicator was recorded. |
-| **Low** | Informational behavior was found, such as a common process-lifecycle capability. |
-| **Medium** | The file has review flags or capa evidence that requires closer inspection. |
-| **High** | A known signature or high-concern capability assessment was associated with the file. |
-
-Directory rows inherit the highest risk of any artifact beneath them.
-
-### Analyzer coverage badges
-
-A badge indicates that an analyzer covered the file.
-
-The absence of a badge can mean the analyzer was not applicable. For example:
-
-- capa can inspect supported PE and ELF binaries.
-- FLOSS is intended for eligible PE files.
-- A text document will not normally receive capa or FLOSS coverage.
-
-Analyzer coverage does not mean the file is safe. It only describes which tools examined it.
-
-### capa results
-
-A capa capability is a description of observed program behavior, not automatically a malware verdict.
-
-For example:
-
-```text
-terminate process
-risk 1 — informational
-```
-
-Process termination is common in legitimate software. Mantha Ray's weighting policy prevents low-context lifecycle behavior from independently forcing a case into review.
-
-Capabilities become more important when they appear in suspicious combinations or alongside stronger evidence.
-
-## Case output
-
-Each scan creates a case directory similar to:
-
-```text
-case-20260925T171612Z-9e778e07/
-├── files.jsonl
-├── manifest.json
-├── report.json
-├── report.md
-├── web-session.json
-├── logs/
-│   └── scanner.log
-└── raw/
-    ├── clamav/
-    ├── capa/
-    └── floss/
-```
-
-### Important files
-
-- `report.md` — human-readable report
-- `report.json` — structured report for automation
-- `files.jsonl` — one inventory record per artifact
-- `manifest.json` — case metadata and tool information
-- `raw/` — bounded analyzer output and per-file results
-- `logs/scanner.log` — scanner activity log
-- `web-session.json` — optional interface metadata used for persisted scan history
-
-The report and inventory should be treated as untrusted evidence when filenames or embedded strings originate from suspicious files.
-
-## Saved scans
-
-Mantha Ray indexes completed cases from the selected results directory.
-
-Saved scans appear in the left sidebar and can be reopened after restarting the application. Scan history is filesystem-backed; no external database or cloud service is required.
-
-The interface ignores malformed, incomplete, or symbolically linked case directories that do not satisfy the expected case structure.
-
-## Updating the ClamAV database
-
-The ClamAV database is included when the analysis image is built.
-
-Mantha Ray intentionally treats a signature database older than 7 days as an incomplete scan, and ClamAV is shown as failed for every file. Refresh it by running setup again while online:
+Then install the latest signed rule packs:
 
 ```bash
-./scripts/setup.sh
+.venv/bin/mantha-ray packs update
 ```
 
-The signature download has its own image layer keyed to the build date, so this re-downloads signatures at most once per day and reuses the cached capa and FLOSS installation.
+## Using it
 
-Verify the database and engine version:
+1. Run `./mantha-ray.sh`. It opens the interface in your browser.
+2. Choose the folder to scan and where to save results (default `~/mantha-ray-results`; it can't be inside the scanned folder).
+3. Pick a resource profile and select **Start secure scan**.
+4. Watch the stage tracker. Switch between **Activity** (the live log) and **Queue** (every file in analysis order, with the current one marked).
+5. Open the file tree. Each file shows a risk and a badge per analyzer (done, partial, finding, not applicable or failed), and expanding it shows why.
+
+### Resource profiles
+
+| Profile | CPUs | Memory | Parallel analyses | capa / FLOSS time budget |
+| --- | --- | --- | --- | --- |
+| Constrained | 1 | 2 GiB | 1 | 30 min each |
+| **Balanced** (default) | 2 | 4 GiB | 2 | 1 h each |
+| High | 4 | 8 GiB | 4 | 2 h each |
+| Custom | any preset with your own limits | | | |
+
+Big game folders need High: on Balanced, capa doesn't reach every program in a multi-gigabyte game within its hour. Whatever isn't reached is reported as a gap.
+
+### Stopping a scan
+
+**Stop scan…** asks for confirmation. Hold **Stop and save report** for two seconds to end the analyses in progress and save a report of the finished work; files not analyzed yet are listed as not reached. **Discard the scan instead** ends it and saves nothing. From a terminal:
 
 ```bash
-docker run --rm \
-  --network none \
-  --entrypoint clamscan \
-  static-triage:core \
-  --version
+./scripts/stop-scan.sh             # type "stop" to confirm; saves a report
+./scripts/stop-scan.sh --discard   # type "discard" to confirm; saves nothing
+./scripts/summary.sh               # short summary of the newest case
 ```
 
-## Rule packs (YARA-X)
+## Rule packs
 
-YARA rules come in signed bundles built by [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit). Mantha Ray checks them against bundle contract v1 before anything is used.
+YARA rules ship as signed bundles built by [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit) and published as releases of [mantha-packs](https://github.com/shashankmantha/mantha-packs).
 
 ```bash
-.venv/bin/mantha-ray packs install mantha-packs-2026.10.25.1.tar.gz   # .minisig must sit next to it
-.venv/bin/mantha-ray packs status
-.venv/bin/mantha-ray packs rollback                                    # back to the previous install
-.venv/bin/mantha-ray packs update                                      # install the latest signed release
-.venv/bin/mantha-ray packs update --check                              # only say whether there's one
+.venv/bin/mantha-ray packs update            # install the latest signed release
+.venv/bin/mantha-ray packs update --check     # only say whether there's a newer one
+.venv/bin/mantha-ray packs status            # what's installed
+.venv/bin/mantha-ray packs install FILE.tar.gz   # a bundle you downloaded (.minisig next to it)
+.venv/bin/mantha-ray packs rollback          # back to the previous install, on purpose
 ```
 
-`packs update` downloads the newest release from [mantha-packs](https://github.com/shashankmantha/mantha-packs), where Hermit publishes signed bundles, and installs it with every check below. Downloads happen on the host only, over HTTPS from GitHub; scan containers never get network access. The **YARA rules** panel in the window has the same **Check for updates** button.
-
-What `packs install` checks, in order:
-
-1. The minisign signature, against the release public key at `src/static_triage/packs/minisign.pub`.
-2. The signed comment, matched exactly: `mantha-packs <version> sha256:<hash>`.
-3. The archive's SHA-256 against the signed hash.
-4. That the bundle isn't older than one already installed. A downloaded bundle can never roll you back; only `packs rollback` can.
-5. A safe unpack: plain files only, no links, no paths outside the folder, with size limits.
-6. The manifest, pack hashes, `pack.json` and `severities.json`. Every rule must compile, which is checked in the scan container, with no network, by the image's own YARA-X.
-7. The bundle's minimum Mantha Ray version.
-
-If any check fails, nothing changes and the current packs stay in use.
-
-Installed packs live in `~/.local/share/mantha-ray/packs`, outside the repository. Each scan mounts them read-only at `/packs`.
-
-For testing, `packs install --unsigned FOLDER` installs a folder from `hermit export-bundle --unsigned`. Reports label those packs **unsigned**.
+The **YARA rules** panel on the setup screen does the same: it shows the installed bundle and has a **Check for updates** button.
 
 ### Your own rules
 
-You can add your own `.yar` files without Hermit. In the window, use **YARA rules → Add your rules** on the scan setup screen. From a terminal:
+Add your own `.yar` files in the **YARA rules** panel, or:
 
 ```bash
-.venv/bin/mantha-ray packs add my_rules.yar                     # a match means Needs Review
-.venv/bin/mantha-ray packs add miners.yar --severity threat     # a match means High Concern
-.venv/bin/mantha-ray packs add notes.yar --severity info        # matches are listed only
+.venv/bin/mantha-ray packs add my_rules.yar                    # a match means Needs Review
+.venv/bin/mantha-ray packs add miners.yar --severity threat    # a match means High Concern
+.venv/bin/mantha-ray packs add notes.yar --severity info       # listed only
 .venv/bin/mantha-ray packs remove my-rules
 ```
 
-- **How it's stored.** Each file becomes a `local:<name>` pack in `~/.local/share/mantha-ray/packs/local`, named after the file.
-- **Checked first.** Rules must compile (checked in the scan container) before they're kept.
+- **Checked first:** each file must compile in the scan container before it's kept.
+- **Kept apart:** your rules are stored as a `local:<name>` pack beside the signed bundle. They're labelled as yours in reports, and bundle updates never touch them.
 - **Supported:** modules such as `import "pe"`, and the `filename`, `filepath` and `extension` externals.
-- **Not supported:** `include`. Put everything a file needs into that one file.
-- **Kept apart from the signed packs.** Your rules run in every scan beside the signed packs, are labelled as your own in reports, and are never changed by bundle installs or rollbacks.
-- **Limits:** up to 50 files, 8 MiB each.
+- **Not supported:** `include`.
+- **Limits:** up to 50 files of 8 MiB each.
 
-**Release key.** Make the key once with `hermit keygen`. It asks for a password: the key can push rules to every install, so it is never stored without one. Copy the public half to `src/static_triage/packs/minisign.pub`, and keep the secret key off the repository, with an offline backup.
-
-## Stopping a scan
-
-In the window, **Stop scan…** asks for confirmation; hold **Stop and save report** for two seconds. The analyses in progress are ended and a report of the work finished so far is saved (files not analyzed yet are listed as not reached). **Discard the scan instead**, also hold-to-confirm, ends it at once and saves nothing.
-
-Without the window (for example after it was closed), from the repository root:
-
-```bash
-./scripts/stop-scan.sh            # stop and save a report; asks you to type "stop"
-./scripts/stop-scan.sh --discard  # end it without a report; asks you to type "discard"
-```
-
-Then `./scripts/summary.sh` shows the saved case.
-
-## Development
-
-### Run all the tests
-
-From the repository root:
-
-```bash
-./scripts/test.sh
-```
-
-This runs the Python tests, checks every shell script's syntax and
-type-checks the frontend, then prints a pass/fail summary. Use
-`--python-only` to run just the Python tests and `-v` for verbose output.
-
-To run the Python tests by hand:
-
-```bash
-PYTHONPATH="$PWD/src" python3 -m unittest discover \
-  -s tests \
-  -p 'test_*.py' \
-  -v
-```
-
-### Type-check and build the frontend
-
-```bash
-cd frontend
-npm run build
-cd ..
-```
-
-The frontend build runs TypeScript checking before producing the bundled web assets.
-
-### Run the development frontend
-
-```bash
-cd frontend
-npm run dev
-```
-
-The production application normally serves the bundled files generated by `npm run build`.
-
-## Project structure
+## Case output
 
 ```text
-malware-scanner/
-├── Containerfile
-├── mantha-ray.sh
-├── scripts/
-│   ├── check-requirements.sh
-│   └── setup.sh
-├── frontend/
-│   ├── index.html
-│   ├── package.json
-│   └── src/
-│       ├── main.ts
-│       └── styles.css
-├── src/
-│   └── static_triage/
-│       ├── cli.py
-│       ├── scanner.py
-│       ├── inventory.py
-│       ├── clamav.py
-│       ├── capa.py
-│       ├── floss.py
-│       ├── yara_scan.py
-│       ├── packs/           # rule pack contract, signatures, install store
-│       ├── reporting.py
-│       ├── host_scan.py
-│       ├── web_api.py
-│       ├── web_service.py
-│       └── web_dist/
-├── tests/
-├── pyproject.toml
-└── README.md
+case-20261024T041611Z-5c8a4689/
+├── report.md        human-readable report
+├── report.json      structured report (schema 0.2.x)
+├── files.jsonl      one inventory record per file, with SHA-256
+├── manifest.json    case metadata and tool versions
+├── logs/
+└── raw/             bounded raw output from ClamAV, capa and FLOSS
 ```
 
-## Troubleshooting
+Filenames and strings in reports come from the sample. Treat them as untrusted evidence, never as instructions.
 
-### Permission denied when running a script
+## Limitations
 
-Git normally preserves executable permissions. If the scripts cannot be executed, restore them with:
-
-```bash
-chmod +x \
-  scripts/check-requirements.sh \
-  scripts/setup.sh \
-  mantha-ray.sh
-```
-
-Then retry:
-
-```bash
-./scripts/setup.sh
-```
-
-### Docker permission denied or unavailable
-
-Confirm that Docker is running:
-
-```bash
-sudo systemctl enable --now docker
-docker info
-```
-
-If access is still denied, add the current account to the Docker group:
-
-```bash
-sudo usermod -aG docker "$USER"
-```
-
-Sign out and back in before retrying.
-
-Do not repeatedly prefix Mantha Ray with `sudo`. The application and its result files should remain owned by the normal user.
-
-### Missing virtual environment
-
-Run the setup workflow:
-
-```bash
-./scripts/setup.sh
-```
-
-The `./mantha-ray.sh` launcher automatically uses the repository's virtual environment after setup completes. Manual activation is not required.
-
-### Missing web interface
-
-Confirm that the bundled frontend exists:
-
-```bash
-test -f src/static_triage/web_dist/index.html
-```
-
-If the file is missing and the frontend development requirements are installed, rebuild it with:
-
-```bash
-./scripts/setup.sh --build-frontend
-```
-
-### `--progress-jsonl` is not recognized
-
-The web application is using an older analysis image. Rebuild it from the current source:
-
-```bash
-docker build \
-  --pull \
-  --file Containerfile \
-  --tag static-triage:core \
-  .
-```
-
-Confirm the flag exists:
-
-```bash
-docker run --rm \
-  --network none \
-  static-triage:core \
-  scan --help | grep progress-jsonl
-```
-
-### Old ClamAV signatures
-
-If every file shows ClamAV as failed, the image's signatures are probably more than 7 days old. Run setup again while online; it refreshes the signatures without reinstalling the other tools:
-
-```bash
-./scripts/setup.sh
-```
-
-If you build the image by hand, pass a new value for `CLAMAV_DB_REFRESH` (for example, `--build-arg CLAMAV_DB_REFRESH=$(date -u +%Y-%m-%d)`), or use `--no-cache` to rebuild everything.
-
-### ClamAV exits with code 2
-
-Inspect the saved output:
-
-```bash
-cat ~/mantha-ray-results/<case-id>/raw/clamav/stdout.txt
-cat ~/mantha-ray-results/<case-id>/raw/clamav/stderr.txt
-```
-
-If the database is too old, rebuild the image with `--no-cache`.
-
-### Python cannot import `tests`
-
-Run the test command from the repository root:
-
-```bash
-cd malware-scanner
-PYTHONPATH="$PWD/src" python3 -m unittest discover \
-  -s tests \
-  -p 'test_*.py' \
-  -v
-```
-
-### The source and results folders overlap
-
-Choose two independent locations. For example:
-
-```text
-Source:  ~/samples/suspicious-folder
-Results: ~/mantha-ray-results
-```
-
-Do not save results beneath the source folder.
-
-### A scan takes a long time
-
-Large folders can require substantial time for:
-
-- File hashing
-- ClamAV scanning
-- Per-binary capa analysis
-- FLOSS extraction
-
-The interface limits analyzer work and reports skipped or timed-out files as coverage gaps rather than silently treating them as clean.
-
-### A clean file appears as low risk
-
-A file may contain an informational capa capability without requiring review. Low risk means a weak static behavior was observed; it is not the same as a known detection.
-
-## Current limitations
-
-- Static analysis cannot observe runtime-only behavior.
-- Packed or encrypted executables can hide capabilities and strings.
-- ClamAV coverage depends on the age and contents of its signature database.
-- capa matches describe behavior and require context.
-- FLOSS currently targets eligible PE files.
-- Very large folders may hit file, size, output, or time limits.
-- Password-protected archives must be handled separately before their contents can be inspected.
-- No static result should be treated as proof that execution is safe.
+- **Static only:** payloads that are encrypted, downloaded later or wait for a trigger aren't visible. Packed and protected programs hide code and strings from every analyzer; they're labelled, but not unpacked.
+- **ClamAV** uses `clamscan`'s default size limits, so very large files (over 100 MB) are not fully scanned by ClamAV yet.
+- **Archives** are recognised but not unpacked. Only ClamAV looks inside them.
+- **capa** is slow on large programs (a big game executable can take 20 minutes or more), and its risk score adds up across files, so large legitimate software can score high.
+- **FLOSS** only deobfuscates programs up to 4 MiB; bigger ones get plain strings.
+- **YARA-X** is only as good as the installed rules.
+- **Platform:** x86-64 Linux with Docker only.
 
 ## Roadmap
 
-Planned work includes:
+Working towards a full scan of large game folders where every file is either proven identical to a known-good copy or fully analyzed:
 
-- Expanded multi-file and mixed-format test fixtures
-- File-level evidence details in the artifact tree
-- High, medium, low, and clean dashboard totals
-- Improved large-tree navigation and filtering
-- Prebuilt release packages
-- Automatically refreshed analysis images
-- Automatic rule pack updates (download, verify, install)
-- Future emulation and sandbox integrations
-- Final retro-inspired interface and color-system pass
+- **Coverage report:** every file against every analyzer that applies to it, plus the ClamAV size-limit fix.
+- **Result cache by SHA-256**, and an overnight "exhaustive" profile.
+- **Reference comparison** against a clean copy, such as a Steam install, so only added or changed files need full analysis.
+- **Known-good library hashes** (OpenAL, FFmpeg, Visual C++, `steam_api`) and a wrong-hash check.
+- **Safe archive unpacking**, and script analysis (Lua and others).
+- **Speakeasy emulation** for Windows programs.
+- **Scheduled rule pack updates.**
+
+## Development
+
+```bash
+./scripts/test.sh                   # Python tests, shell syntax, frontend type check
+./scripts/test.sh --python-only -v
+./scripts/setup.sh --build-frontend # after changing files under frontend/ (needs Node.js)
+cd frontend && npm run dev          # frontend dev server
+```
+
+The compiled interface is committed under `src/static_triage/web_dist/`, so Node.js is only needed to change it.
+
+```text
+malware-scanner/
+├── Containerfile          analysis image: ClamAV, capa, FLOSS, YARA-X
+├── mantha-ray.sh          launcher
+├── scripts/               setup, tests, stop-scan, summary, requirement checks
+├── frontend/              TypeScript + Vite web interface
+├── src/static_triage/
+│   ├── scanner.py         runs the stages (inside the container)
+│   ├── inventory.py       safe tree walk and hashing
+│   ├── clamav.py  yara_scan.py  capa.py  floss.py  plain_strings.py
+│   ├── parallel.py        parallel, memory-aware scheduling
+│   ├── reporting.py       verdict and reports
+│   ├── packs/             bundle contract, signatures, install, update, your own rules
+│   ├── container/         hardened Docker command and host controller
+│   └── web/  web_api.py   local web service
+└── tests/
+```
+
+**For maintainers:** the release public key is `src/static_triage/packs/minisign.pub` (key ID `BA7C3365DEC27B32`). The matching secret key is password-protected, kept off every repository, and backed up offline. Rotating it means shipping the new public key in a code update before signing with it.
+
+More help: [docs/installation.md](docs/installation.md) and [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ## Responsible use
 
-Mantha Ray is intended for defensive security analysis, education, incident response, and authorized research.
-
-Only inspect files that you are authorized to possess and analyze. Do not use the project to distribute malware, bypass access controls, or execute suspicious software on systems you do not own or administer.
-
-When in doubt, preserve the sample, keep it isolated, and escalate it for professional review.
+Mantha Ray is for defensive analysis, education, incident response and authorized research. Only inspect files you're allowed to have and analyze, keep samples isolated, and don't use this project to distribute malware or to run suspicious software on systems you don't own.
