@@ -46,7 +46,7 @@ cat ~/mantha-ray-results/<case-id>/raw/clamav/stderr.txt
 ## YARA-X shows "No rule packs installed"
 
 ```bash
-.venv/bin/mantha-ray packs update
+mantha-ray packs update
 ```
 
 If that fails:

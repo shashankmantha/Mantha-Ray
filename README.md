@@ -99,25 +99,26 @@ git clone https://github.com/shashankmantha/Mantha-Ray.git malware-scanner
 cd malware-scanner
 ./scripts/check-requirements.sh
 ./scripts/setup.sh
-./mantha-ray.sh
+mantha-ray
 ```
 
 `setup.sh` does the following:
 - creates `.venv` and installs Mantha Ray;
 - builds the analysis image, which downloads ClamAV signatures, capa and its rules, FLOSS, and the YARA-X scanner (checked against a pinned hash). This needs internet access and takes several minutes the first time;
-- checks the image and prints the tool versions.
+- checks the image and prints the tool versions;
+- adds a `mantha-ray` command for your account (a link in `~/.local/bin`), so you never activate the virtual environment, and `mantha-ray packs update` works from any folder. `./mantha-ray.sh` in the repository does the same thing.
 
 Run it again at least weekly to refresh ClamAV signatures; it reuses everything else.
 
 Then install the latest signed rule packs:
 
 ```bash
-.venv/bin/mantha-ray packs update
+mantha-ray packs update
 ```
 
 ## Using it
 
-1. Run `./mantha-ray.sh`. It opens the interface in your browser.
+1. Run `mantha-ray`. It opens the interface in your browser.
 2. Choose the folder to scan and where to save results (default `~/mantha-ray-results`; it can't be inside the scanned folder).
 3. Pick a resource profile and select **Start secure scan**.
 4. Watch the stage tracker. Switch between **Activity** (the live log) and **Queue** (every file in analysis order, with the current one marked).
@@ -149,11 +150,11 @@ Big game folders need High: on Balanced, capa doesn't reach every program in a m
 YARA rules ship as signed bundles built by [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit) and published as releases of [mantha-packs](https://github.com/shashankmantha/mantha-packs).
 
 ```bash
-.venv/bin/mantha-ray packs update            # install the latest signed release
-.venv/bin/mantha-ray packs update --check     # only say whether there's a newer one
-.venv/bin/mantha-ray packs status            # what's installed
-.venv/bin/mantha-ray packs install FILE.tar.gz   # a bundle you downloaded (.minisig next to it)
-.venv/bin/mantha-ray packs rollback          # back to the previous install, on purpose
+mantha-ray packs update            # install the latest signed release
+mantha-ray packs update --check     # only say whether there's a newer one
+mantha-ray packs status            # what's installed
+mantha-ray packs install FILE.tar.gz   # a bundle you downloaded (.minisig next to it)
+mantha-ray packs rollback          # back to the previous install, on purpose
 ```
 
 The **YARA rules** panel on the setup screen does the same: it shows the installed bundle and has a **Check for updates** button.
@@ -163,10 +164,10 @@ The **YARA rules** panel on the setup screen does the same: it shows the install
 Add your own `.yar` files in the **YARA rules** panel, or:
 
 ```bash
-.venv/bin/mantha-ray packs add my_rules.yar                    # a match means Needs Review
-.venv/bin/mantha-ray packs add miners.yar --severity threat    # a match means High Concern
-.venv/bin/mantha-ray packs add notes.yar --severity info       # listed only
-.venv/bin/mantha-ray packs remove my-rules
+mantha-ray packs add my_rules.yar                    # a match means Needs Review
+mantha-ray packs add miners.yar --severity threat    # a match means High Concern
+mantha-ray packs add notes.yar --severity info       # listed only
+mantha-ray packs remove my-rules
 ```
 
 - **Checked first:** each file must compile in the scan container before it's kept.

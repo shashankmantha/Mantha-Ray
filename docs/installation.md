@@ -54,8 +54,8 @@ Run `setup.sh` again at least once a week. ClamAV signatures older than 7 days m
 Then install the rule packs:
 
 ```bash
-.venv/bin/mantha-ray packs update
-.venv/bin/mantha-ray packs status
+mantha-ray packs update
+mantha-ray packs status
 ```
 
 ## Changing the web interface
@@ -69,12 +69,12 @@ The built files go to `src/static_triage/web_dist/`, which is committed so norma
 ## Running
 
 ```bash
-./mantha-ray.sh                              # opens the interface in your browser
-.venv/bin/mantha-ray web --no-browser        # prints the address instead
-.venv/bin/mantha-ray web --port 8080         # a fixed port
+mantha-ray                                   # opens the interface in your browser
+mantha-ray web --no-browser        # prints the address instead
+mantha-ray web --port 8080         # a fixed port
 ```
 
-The launcher uses `.venv` directly; there's no need to activate it.
+`setup.sh` links the `mantha-ray` command into `~/.local/bin` (it never replaces a file or a link that points elsewhere). If your shell says `command not found`, log out and back in so `~/.local/bin` is on your `PATH`, or use `./mantha-ray.sh` from the repository. Either way there's no need to activate `.venv`.
 
 ## For untrusted samples
 

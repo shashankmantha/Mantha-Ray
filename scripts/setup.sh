@@ -194,6 +194,30 @@ yara_x_version="$(
     --version
 )"
 
+# A `mantha-ray` command for this user, so `mantha-ray packs update` works
+# from any folder without activating the virtual environment. Only ever
+# replaces a link that already points into a Mantha Ray checkout.
+link_dir="$HOME/.local/bin"
+link="$link_dir/mantha-ray"
+launcher="$PROJECT_ROOT/mantha-ray.sh"
+command_note=''
+if [[ -L "$link" || ! -e "$link" ]]; then
+  current="$(readlink -- "$link" 2>/dev/null || true)"
+  if [[ -z "$current" || "$current" == */mantha-ray.sh ]]; then
+    mkdir -p -- "$link_dir"
+    ln -sfn -- "$launcher" "$link"
+    command_note="Command: mantha-ray (linked in $link_dir)"
+    case ":$PATH:" in
+      *":$link_dir:"*) ;;
+      *) command_note="$command_note; $link_dir isn't on your PATH yet, so log out and back in, or add it" ;;
+    esac
+  else
+    command_note="Not linking $link: it points somewhere else ($current)"
+  fi
+else
+  command_note="Not linking $link: a file with that name already exists"
+fi
+
 step "Setup complete"
 printf '%s\n' \
   "Analysis image: $IMAGE_NAME" \
@@ -201,8 +225,10 @@ printf '%s\n' \
   "YARA-X: $yara_x_version" \
   'Signatures expire after 7 days. Run this setup again to refresh them.' \
   '' \
-  'Rule packs: .venv/bin/mantha-ray packs status' \
+  "$command_note" \
+  '' \
+  'Rule packs:   mantha-ray packs update   (or ./mantha-ray.sh packs update)' \
   '' \
   'Launch Mantha Ray with:' \
   '' \
-  '  ./mantha-ray.sh'
+  '  mantha-ray   (or ./mantha-ray.sh from this folder)'
