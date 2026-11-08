@@ -302,6 +302,25 @@ class SummaryTests(unittest.TestCase):
         order = text.index("steam_api64.dll") < text.index("big.dll")
         self.assertTrue(order)
 
+    def test_summary_coverage(self) -> None:
+        report = json.loads(json.dumps(self.REPORT))
+        report["coverage"] = {
+            "files": 1200, "fully_checked": 1150, "partially_checked": 2, "with_gaps": 48,
+            "gap_count": 25,
+            "gaps": [
+                {"relative_path": f"data/f{i}.pak", "analyzer": "clamav", "status": "too_large",
+                 "reason": "larger than ClamAV can scan (2047 MiB)"}
+                for i in range(25)
+            ],
+        }
+        with tempfile.TemporaryDirectory() as temporary:
+            case = self._case(Path(temporary), "case-20261018T204134Z-81a4f265", report)
+            text = summarize(case)
+        self.assertIn("Coverage Fully checked: 1,150 of 1,200 files (2 partly checked, 48 with gaps)", text)
+        self.assertIn("data/f0.pak  clamav too large: larger than ClamAV can scan", text)
+        self.assertIn("… and 5 more (see report.json)", text)
+        self.assertNotIn("data/f20.pak", text)
+
     def test_newest_case_is_chosen(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

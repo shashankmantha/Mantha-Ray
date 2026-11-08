@@ -8,7 +8,7 @@ from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
-from . import __version__
+from . import __version__, stop_request
 from .capa import CapaBatchResult
 from .capa_risk import (
     HIGH_CONCERN_SCORE,
@@ -17,6 +17,7 @@ from .capa_risk import (
 )
 from .clamav import ClamAVResult, ClamAVStatus
 from .config import ScanConfig
+from .coverage import build_coverage, headline
 from .deduplication import group_entries_by_sha256
 from .floss import FlossBatchResult
 from .yara_scan import YaraBatchResult
@@ -65,6 +66,16 @@ def _bounded_text(
         return text
 
     return text[: max_chars - 1] + "…"
+
+
+def _markdown_text(value: object, max_chars: int = 300) -> str:
+    """Untrusted text as plain Markdown: no links, HTML, code spans or table cells."""
+
+    text = _bounded_text(value, max_chars)
+    return "".join(
+        "\\" + character if character in "\\`[]<>|" else character
+        for character in text
+    )
 
 
 def _markdown_code(value: object) -> str:
@@ -424,6 +435,16 @@ def write_case_artifacts(
         yara_result,
     )
 
+    coverage = build_coverage(
+        entries,
+        tools=tools,
+        clamav_result=clamav_result,
+        yara_result=yara_result,
+        capa_result=capa_result,
+        floss_result=floss_result,
+        stopped=stop_request.requested(),
+    )
+
     report = {
         "schema_version": SCHEMA_VERSION,
         "case_id": case_id,
@@ -433,6 +454,7 @@ def write_case_artifacts(
             "that files are safe."
         ),
         "summary": summary.to_dict(),
+        "coverage": coverage,
         "resources": resources,
         "stage_timings": stage_timings or {},
         "warnings": warnings,
@@ -865,6 +887,70 @@ def _render_yara(yara: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+COVERAGE_STATUS_LABELS = {
+    "done": "done",
+    "finding": "finding",
+    "partial": "partial",
+    "not_reached": "not reached",
+    "timed_out": "timed out",
+    "too_large": "too large",
+    "failed": "failed",
+    "stopped": "stopped",
+    "not_run": "not run",
+}
+MAX_MARKDOWN_GAPS = 100
+
+
+def _render_coverage(
+    coverage: dict[str, Any] | None,
+    incomplete_reasons: list[str],
+) -> list[str]:
+    lines = ["", "## Coverage", ""]
+    if coverage:
+        lines.append(f"**{headline(coverage)}.**")
+        lines.extend([
+            "",
+            "A file is fully checked when every analyzer that applies to it "
+            "finished it. Finding a match still counts as checked.",
+            "",
+            "| Analyzer | Applies to | Checked | Partial | Gaps |",
+            "| --- | ---: | ---: | ---: | ---: |",
+        ])
+        for name, counts in coverage.get("analyzers", {}).items():
+            applicable = counts.get("applicable", 0)
+            if name == "inventory":
+                if applicable:
+                    lines.append(f"| inventory | {applicable:,} | 0 | 0 | {applicable:,} |")
+                continue
+            checked = counts.get("done", 0) + counts.get("finding", 0)
+            partial = counts.get("partial", 0)
+            lines.append(
+                f"| {name} | {applicable:,} | {checked:,} | {partial:,} | "
+                f"{applicable - checked - partial:,} |"
+            )
+        for note in coverage.get("notes", []):
+            lines.extend(["", f"- {_markdown_text(note)}"])
+        gaps = coverage.get("gaps", [])
+        if gaps:
+            lines.extend(["", "### Files not fully checked", ""])
+            for gap in gaps[:MAX_MARKDOWN_GAPS]:
+                status = COVERAGE_STATUS_LABELS.get(gap["status"], gap["status"])
+                reason = f": {_markdown_text(gap['reason'])}" if gap.get("reason") else ""
+                lines.append(
+                    f"- {_markdown_code(gap['relative_path'])} — "
+                    f"{gap['analyzer']} {status}{reason}"
+                )
+            hidden = coverage.get("gap_count", len(gaps)) - min(len(gaps), MAX_MARKDOWN_GAPS)
+            if hidden > 0:
+                lines.append(f"- … and {hidden:,} more (all of them are in report.json)")
+    if incomplete_reasons:
+        lines.extend(["", "### Incomplete stages", ""])
+        lines.extend(f"- {reason}" for reason in incomplete_reasons)
+    else:
+        lines.extend(["", "All configured inventory and analyzer stages completed."])
+    return lines
+
+
 def _render_markdown(
     report: dict[str, Any],
 ) -> str:
@@ -882,6 +968,11 @@ def _render_markdown(
             .replace("_", " ")
             .title()
             + "**"
+        ),
+        *(
+            [f"- Coverage: {headline(report['coverage'])} (details under Coverage)"]
+            if report.get("coverage")
+            else []
         ),
         f"- Uncertainty: {report['uncertainty']}",
         "",
@@ -1606,34 +1697,7 @@ def _render_markdown(
         "incomplete_reasons"
     ]
 
-    if incomplete_reasons:
-        lines.extend(
-            [
-                "",
-                (
-                    "## Coverage gaps and "
-                    "incomplete stages"
-                ),
-                "",
-            ]
-        )
-
-        lines.extend(
-            f"- {reason}"
-            for reason in incomplete_reasons
-        )
-    else:
-        lines.extend(
-            [
-                "",
-                "## Coverage",
-                "",
-                (
-                    "All configured inventory and "
-                    "analyzer stages completed."
-                ),
-            ]
-        )
+    lines.extend(_render_coverage(report.get("coverage"), incomplete_reasons))
 
     lines.extend(
         [

@@ -17,7 +17,7 @@ Every file is inventoried and hashed, then checked by ClamAV signatures, YARA-X 
   - identical files analyzed once;
   - per-file timeouts that grow with size;
   - a fast plain-strings pass for files too big for FLOSS.
-- **Honest coverage:** files that weren't reached, timed out or ran out of memory are reported as gaps, never as clean.
+- **Honest coverage:** every report says how many files were fully checked, and names each file an analyzer didn't finish (not reached, timed out, too large, out of memory) as a gap, never as clean.
 - **Live interface:**
   - stage tracker and activity console;
   - a terminal-style queue showing which file is being analyzed;
@@ -54,7 +54,7 @@ flowchart TB
 | **YARA-X** | Every file against the installed rule packs. Each rule's severity (`threat`, `suspicious` or `info`) comes from its pack. Skipped, not counted as a gap, when no packs are installed. |
 | **capa** | What PE and ELF programs can do: injection, persistence, networking, anti-analysis and so on, with weighted risk scoring. |
 | **FLOSS** | Stack, tight and decoded strings from Windows programs up to 4 MiB. Bigger files get a fast plain-strings pass filtered for URLs, mining pools, commands, credential paths and similar. |
-| **Report** | A verdict, per-file results, coverage gaps, stage timings and resource use. |
+| **Report** | A verdict, a "fully checked: N of M files" headline with every gap listed, per-file results, stage timings and resource use. |
 
 ### Verdicts
 
@@ -65,6 +65,10 @@ flowchart TB
 | **Needs Review** | A YARA-X `suspicious` rule matched, or capa or the inventory found evidence that needs a person to look. |
 | **No Indicators Detected** | Every stage finished and found nothing. This does not prove the files are safe. |
 | **Incomplete** | A stage failed, timed out or didn't reach every file. |
+
+### Coverage
+
+Next to the verdict, every report says how many files were **fully checked**: every analyzer that applies to a file finished it (a match still counts as checked). ClamAV and YARA-X apply to every file, capa to Windows and Linux programs, and FLOSS to Windows programs. Files that were only partly checked (for example, plain strings instead of FLOSS's decoding) are counted separately, and every gap is listed with its reason in `report.json`, `report.md`, the web results and `scripts/summary.sh`. If no YARA rule packs are installed, YARA-X isn't counted, and the report says so.
 
 ## Security design
 
@@ -193,7 +197,7 @@ Filenames and strings in reports come from the sample. Treat them as untrusted e
 ## Limitations
 
 - **Static only:** payloads that are encrypted, downloaded later or wait for a trigger aren't visible. Packed and protected programs hide code and strings from every analyzer; they're labelled, but not unpacked.
-- **ClamAV** uses `clamscan`'s default size limits, so very large files (over 100 MB) are not fully scanned by ClamAV yet.
+- **ClamAV** can't scan a single file over about 2 GiB, or spend more than 10 minutes on one file. Files over those limits are listed as coverage gaps.
 - **Archives** are recognised but not unpacked. Only ClamAV looks inside them.
 - **capa** is slow on large programs (a big game executable can take 20 minutes or more), and its risk score adds up across files, so large legitimate software can score high.
 - **FLOSS** only deobfuscates programs up to 4 MiB; bigger ones get plain strings.
@@ -204,7 +208,6 @@ Filenames and strings in reports come from the sample. Treat them as untrusted e
 
 Working towards a full scan of large game folders where every file is either proven identical to a known-good copy or fully analyzed:
 
-- **Coverage report:** every file against every analyzer that applies to it, plus the ClamAV size-limit fix.
 - **Result cache by SHA-256**, and an overnight "exhaustive" profile.
 - **Reference comparison** against a clean copy, such as a Steam install, so only added or changed files need full analysis.
 - **Known-good library hashes** (OpenAL, FFmpeg, Visual C++, `steam_api`) and a wrong-hash check.

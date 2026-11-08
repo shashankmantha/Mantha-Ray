@@ -6,11 +6,13 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .coverage import headline
 from .file_progress import format_duration, format_size
 
 DEFAULT_RESULTS = Path.home() / "mantha-ray-results"
 MAX_REPORT_BYTES = 8 * 1024 * 1024
 MAX_ORDER_LINES = 40
+MAX_GAP_LINES = 20
 
 _CASE_NAME = re.compile(r"^case-\d{8}T\d{6}Z-[0-9a-f]{8}$")
 _CONTROL = {code: "?" for code in (*range(0x20), *range(0x7F, 0xA0))}
@@ -231,6 +233,36 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     return lines
 
 
+def coverage_line(data: object) -> str:
+    if not isinstance(data, dict):
+        return "not recorded (older case)"
+    try:
+        return clean(headline(data), 120)
+    except (TypeError, ValueError, KeyError):
+        return "not readable"
+
+
+def coverage_gap_lines(data: object) -> list[str]:
+    if not isinstance(data, dict):
+        return []
+    gaps = [g for g in data.get("gaps") or [] if isinstance(g, dict)]
+    if not gaps:
+        return []
+    lines = ["", "Not fully checked:"]
+    for gap in gaps[:MAX_GAP_LINES]:
+        status = clean(gap.get("status", "?"), 20).replace("_", " ")
+        reason = gap.get("reason")
+        lines.append(
+            f"  {clean(gap.get('relative_path', '?'), 80)}  "
+            f"{clean(gap.get('analyzer', '?'), 12)} {status}"
+            + (f": {clean(reason, 90)}" if reason else "")
+        )
+    total = data.get("gap_count", len(gaps))
+    if isinstance(total, int) and total > MAX_GAP_LINES:
+        lines.append(f"  … and {total - MAX_GAP_LINES:,} more (see report.json)")
+    return lines
+
+
 def summarize(case: Path) -> str:
     report = load_report(case)
     status = clean(report.get("status", "unknown"), 40).replace("_", " ").title()
@@ -243,6 +275,7 @@ def summarize(case: Path) -> str:
     lines = [
         f"Case     {clean(case.name)}  ({status})",
         f"Files    {files} files, {format_size(size)}",
+        f"Coverage {coverage_line(report.get('coverage'))}",
         f"Profile  {profile_line(report)}",
         f"Timings  {timings_line(report)}",
         f"ClamAV   {clean(clamav.get('status', 'not recorded'), 20)}"
@@ -256,6 +289,7 @@ def summarize(case: Path) -> str:
     warnings = [w for w in report.get("warnings") or [] if isinstance(w, str)]
     if any("stopped by the user" in w for w in warnings):
         lines += ["", "Stopped  by you before it finished; this covers the work done by then."]
+    lines += coverage_gap_lines(report.get("coverage"))
     reasons = report.get("incomplete_reasons") or []
     if reasons:
         lines += ["", "Coverage gaps:"]

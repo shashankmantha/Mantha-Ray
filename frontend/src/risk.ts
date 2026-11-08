@@ -192,6 +192,87 @@ function yaraCoverage(
   return data.complete === true ? "completed" : "incomplete";
 }
 
+// Per-file coverage worked out by the scanner (report.coverage, schema
+// 0.2.10+). It lists only the files and analyzers that weren't fully
+// checked; everything else that applies was checked.
+interface ServerCoverage {
+  gaps: Map<string, Map<string, string>>;
+  truncated: boolean;
+  yaraApplies: boolean;
+}
+
+const CAPA_ROUTING = new Set(["pe_executable", "pe_dll", "elf"]);
+const FLOSS_ROUTING = new Set(["pe_executable", "pe_dll"]);
+
+function serverCoverage(report: JsonObject): ServerCoverage | null {
+  const coverage = objectValue(report.coverage);
+  if (!coverage || !Array.isArray(coverage.gaps)) {
+    return null;
+  }
+  const gaps = new Map<string, Map<string, string>>();
+  for (const value of coverage.gaps) {
+    const gap = objectValue(value);
+    if (
+      typeof gap?.relative_path !== "string"
+      || typeof gap.analyzer !== "string"
+      || typeof gap.status !== "string"
+    ) {
+      continue;
+    }
+    const forPath = gaps.get(gap.relative_path) ?? new Map<string, string>();
+    forPath.set(gap.analyzer, gap.status);
+    gaps.set(gap.relative_path, forPath);
+  }
+  const yaraCounts = objectValue(objectValue(coverage.analyzers)?.yara);
+  return {
+    gaps,
+    truncated: coverage.gaps_truncated === true,
+    yaraApplies: typeof yaraCounts?.applicable !== "number" || yaraCounts.applicable > 0,
+  };
+}
+
+function gapStatus(status: string): CoverageStatus {
+  if (status === "failed") {
+    return "error";
+  }
+  if (status === "not_run") {
+    return "unavailable";
+  }
+  return "incomplete";
+}
+
+function serverFileCoverage(
+  server: ServerCoverage,
+  artifact: ArtifactRecord,
+  findings: Record<AnalyzerName, boolean>,
+): Record<AnalyzerName, CoverageStatus> | null {
+  const gaps = server.gaps.get(artifact.relative_path);
+  if (!gaps && server.truncated) {
+    // Not every gap fits in the report; fall back for unlisted files.
+    return null;
+  }
+  const routing = artifact.routing_class?.toLowerCase() ?? "";
+  const readable = artifact.kind === "regular_file" && artifact.state === "inventoried";
+  const applies: Record<AnalyzerName, boolean> = {
+    clamav: readable,
+    yara: readable && server.yaraApplies,
+    capa: readable && CAPA_ROUTING.has(routing),
+    floss: readable && FLOSS_ROUTING.has(routing),
+  };
+  const result = {} as Record<AnalyzerName, CoverageStatus>;
+  for (const name of ["clamav", "yara", "capa", "floss"] as AnalyzerName[]) {
+    const gap = gaps?.get(name);
+    if (gap) {
+      result[name] = gapStatus(gap);
+    } else if (!applies[name]) {
+      result[name] = "not-applicable";
+    } else {
+      result[name] = findings[name] ? "finding" : "completed";
+    }
+  }
+  return result;
+}
+
 const yaraSeverityRisk: Record<string, ArtifactRisk> = {
   threat: "high",
   suspicious: "medium",
@@ -328,6 +409,7 @@ export function artifactDisplayRecords(
   const yaraResults = analyzerResultMap(yara);
   const capaResults = analyzerResultMap(capa);
   const flossResults = analyzerResultMap(floss);
+  const server = serverCoverage(report);
   // Files over FLOSS's size limit are not applicable, not a gap.
   const flossOversized = new Set(
     Array.isArray(floss?.skipped_size_paths)
@@ -378,7 +460,12 @@ export function artifactDisplayRecords(
     } else {
       clamavCoverage = "incomplete";
     }
-    const coverage: Record<AnalyzerName, CoverageStatus> = {
+    const yaraMatched = Array.isArray(yaraResult?.matches) && yaraResult.matches.length > 0;
+    const coverage: Record<AnalyzerName, CoverageStatus> = (server && serverFileCoverage(
+      server,
+      artifact,
+      { clamav: hasClamavFinding, yara: yaraMatched, capa: false, floss: false },
+    )) || {
       clamav: clamavCoverage,
       yara: yaraCoverage(yara, yaraResult, regularFile),
       capa: analyzerCoverage(

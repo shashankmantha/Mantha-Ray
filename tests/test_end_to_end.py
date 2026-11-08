@@ -7,7 +7,7 @@ import hashlib
 import os
 
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import ANY, patch
 
 from static_triage.clamav import (
     ClamAVFinding,
@@ -240,6 +240,7 @@ class EndToEndTests(unittest.TestCase):
             mocked_clamav.assert_called_once_with(
                 sample.resolve(),
                 executable="/usr/bin/clamscan",
+                timeout_seconds=ANY,
             )
 
             report = json.loads(
@@ -266,6 +267,15 @@ class EndToEndTests(unittest.TestCase):
             self.assertEqual(
                 clamav_report["findings"][0]["signature"],
                 "Win.Test.EICAR_HDB-1",
+            )
+
+            self.assertEqual(
+                report["coverage"]["analyzers"]["clamav"],
+                {"applicable": 1, "finding": 1},
+            )
+            self.assertIn(
+                "- Coverage: Fully checked:",
+                (result.case_directory / "report.md").read_text(encoding="utf-8"),
             )
 
             raw_result = json.loads(

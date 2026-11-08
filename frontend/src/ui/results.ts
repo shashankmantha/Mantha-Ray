@@ -184,6 +184,32 @@ function setStage(
     analyzerDescription(data, name);
 }
 
+function renderCoverageMetric(report: JsonObject, summary: JsonObject): void {
+  const label = element("metric-files-label");
+  const value = element("metric-files");
+  const note = element("metric-files-note");
+  const coverage = objectValue(report.coverage);
+  const files = coverage?.files;
+  const full = coverage?.fully_checked;
+  if (typeof files !== "number" || typeof full !== "number") {
+    // Reports from before schema 0.2.10 have no coverage section.
+    label.textContent = "Regular files";
+    value.textContent = numberValue(summary.regular_files);
+    note.textContent = "";
+    return;
+  }
+  label.textContent = "Fully checked";
+  value.textContent = `${full.toLocaleString()} / ${files.toLocaleString()}`;
+  const parts: string[] = [];
+  if (typeof coverage?.partially_checked === "number" && coverage.partially_checked > 0) {
+    parts.push(`${coverage.partially_checked.toLocaleString()} partly`);
+  }
+  if (typeof coverage?.with_gaps === "number" && coverage.with_gaps > 0) {
+    parts.push(`${coverage.with_gaps.toLocaleString()} with gaps`);
+  }
+  note.textContent = parts.length > 0 ? parts.join(" · ") : "every file checked";
+}
+
 function renderResult(state: ScanState): void {
   const result = state.result;
   if (!result) {
@@ -199,9 +225,7 @@ function renderResult(state: ScanState): void {
   const yara = analyzer(report, "yara");
   const capa = analyzer(report, "capa");
   const floss = analyzer(report, "floss");
-  element("metric-files").textContent =
-  
-    numberValue(summary.regular_files);
+  renderCoverageMetric(report, summary);
   element("metric-yara").textContent =
     yara && yara.status !== "unavailable"
       ? numberValue(yara.matched_files)
@@ -222,7 +246,7 @@ function renderResult(state: ScanState): void {
   const incompleteReasons = report.incomplete_reasons;
   element("coverage-label").textContent =
     Array.isArray(incompleteReasons) && incompleteReasons.length > 0
-      ? `${incompleteReasons.length} coverage gap${incompleteReasons.length === 1 ? "" : "s"}`
+      ? `${incompleteReasons.length} stage${incompleteReasons.length === 1 ? "" : "s"} incomplete`
       : "All configured stages completed";
   element("report-panel").textContent = result.report_markdown;
   element("activity-panel").textContent = activityText(

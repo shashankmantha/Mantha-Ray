@@ -13,12 +13,13 @@ from .boundary import (
 )
 from .capa import CapaBatchResult, run_capa_batch
 from .clamav import ClamAVResult, run_clamav
+from .clamav import scan_timeout_seconds as clamav_scan_timeout
 from .config import ScanConfig
 from .floss import FlossBatchResult, run_floss_batch
 from . import __version__
 from .yara_scan import PACKS_MOUNT, YaraBatchResult, run_yara_stage, summary_message
 from .inventory import inventory_tree
-from .models import ToolInfo
+from .models import EntryKind, ToolInfo
 from .preflight import inspect_tools
 from .reporting import write_case_artifacts
 from .scan_record import (
@@ -200,6 +201,14 @@ def run_inventory_scan(
             clamav_result = run_clamav(
                 target,
                 executable=clamav_tool.executable,
+                timeout_seconds=clamav_scan_timeout(
+                    sum(
+                        entry.size_bytes
+                        for entry in entries
+                        if entry.kind is EntryKind.REGULAR_FILE
+                        and isinstance(entry.size_bytes, int)
+                    )
+                ),
             )
         except OSError as exc:
             warnings.append(

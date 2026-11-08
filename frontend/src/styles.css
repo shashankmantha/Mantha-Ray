@@ -785,6 +785,13 @@ h2 {
   letter-spacing: -0.03em;
 }
 
+.metric-note {
+  display: block;
+  margin-top: 0.25rem;
+  color: #8894ba;
+  font-size: 0.75rem;
+}
+
 .results-block + .results-block {
   margin-top: 1rem;
 }
