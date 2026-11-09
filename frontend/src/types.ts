@@ -18,6 +18,8 @@ export type StageStatus =
   | "cancelled";
 
 export interface ScanEvent {
+  // Position in the scan's activity log; missing in saved history.
+  seq?: number;
   time: string;
   message: string;
 }
@@ -114,6 +116,8 @@ export interface ScanState {
   state: string;
   message: string;
   events: ScanEvent[];
+  // Messages ever logged; the server keeps only the newest ones.
+  event_count?: number;
   queues?: Record<string, StageQueue>;
   stages?: Partial<Record<StageName, StageStatus>>;
   result: ScanResult | null;

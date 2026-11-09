@@ -13,6 +13,7 @@ from fastapi import (
     FastAPI,
     Header,
     HTTPException,
+    Query,
     Request,
     Response,
     status,
@@ -408,9 +409,10 @@ def create_app(
             None,
             Depends(require_session),
         ],
+        since: Annotated[int | None, Query(ge=0)] = None,
     ) -> dict[str, object]:
         try:
-            return service.get(scan_id)
+            return service.get(scan_id, since)
 
         except HostScanError as exc:
             raise HTTPException(

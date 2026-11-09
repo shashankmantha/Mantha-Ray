@@ -95,12 +95,7 @@ class ScanRuntime:
                 ),
             )
 
-            state.events.append(
-                {
-                    "time": state.created_at,
-                    "message": state.message,
-                }
-            )
+            state.add_event(state.created_at, state.message)
 
             self._scans[scan_id] = state
             self._active_scan_id = scan_id
@@ -116,6 +111,7 @@ class ScanRuntime:
     def get(
         self,
         scan_id: str,
+        since: int | None = None,
     ) -> dict[str, Any]:
         """Return a detached representation of a scan."""
 
@@ -127,7 +123,7 @@ class ScanRuntime:
                     "The requested scan does not exist."
                 )
 
-            return state.to_dict()
+            return state.to_dict(since)
 
     def cancel(
         self,
@@ -344,12 +340,7 @@ class ScanRuntime:
             state = self._scans[scan_id]
             state.message = message
             state.updated_at = now()
-            state.events.append(
-                {
-             "time": state.updated_at,
-                    "message": message,
-                }
-            )
+            state.add_event(state.updated_at, message)
 
     def _queue(
         self,
@@ -436,12 +427,7 @@ class ScanRuntime:
             self._track_file(state, stage, status, message)
             state.message = message
             state.updated_at = now()
-            state.events.append(
-                {
-                    "time": state.updated_at,
-                    "message": message,
-                }
-            )
+            state.add_event(state.updated_at, message)
 
     def _update(
         self,
@@ -480,12 +466,7 @@ class ScanRuntime:
         state.state = status
         state.message = message
         state.updated_at = now()
-        state.events.append(
-            {
-                "time": state.updated_at,
-                "message": message,
-            }
-        )
+        state.add_event(state.updated_at, message)
 
     def _complete(
         self,

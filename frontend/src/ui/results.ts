@@ -251,6 +251,7 @@ function renderResult(state: ScanState): void {
   element("report-panel").textContent = result.report_markdown;
   element("activity-panel").textContent = activityText(
     state.events,
+    state.event_count,
   );
   element("json-panel").textContent = JSON.stringify(
     report,

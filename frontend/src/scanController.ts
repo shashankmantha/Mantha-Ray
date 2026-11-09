@@ -9,6 +9,7 @@ import {
 } from "./sessionStore";
 import type {
   ResourceSelection,
+  ScanEvent,
   ScanSession,
   ScanState,
 } from "./types";
@@ -18,6 +19,28 @@ const terminalStates = new Set([
   "failed",
   "cancelled",
 ]);
+
+// Same cap as the server's activity log.
+const MAX_EVENTS = 1000;
+
+function lastSeq(events: readonly ScanEvent[]): number {
+  const seq = events[events.length - 1]?.seq;
+  return typeof seq === "number" ? seq : 0;
+}
+
+/** Add newly received messages; start over if some were missed. */
+export function mergeEvents(
+  previous: readonly ScanEvent[],
+  incoming: readonly ScanEvent[],
+): ScanEvent[] {
+  if (incoming.length === 0) {
+    return [...previous];
+  }
+  const merged = incoming[0].seq === lastSeq(previous) + 1
+    ? previous.concat(incoming)
+    : [...incoming];
+  return merged.length > MAX_EVENTS ? merged.slice(-MAX_EVENTS) : merged;
+}
 
 export function isTerminalState(state: string): boolean {
   return terminalStates.has(state);
@@ -170,9 +193,12 @@ export function createScanController(
       return;
     }
     try {
+      // Ask only for messages newer than the ones already shown.
+      const previous = getSession(scanId)?.state.events ?? [];
       const state = await api<ScanState>(
-        `/api/scans/${scanId}`,
+        `/api/scans/${scanId}?since=${lastSeq(previous)}`,
       );
+      state.events = mergeEvents(previous, state.events);
       updateSession(state);
       if (terminalStates.has(state.state)) {
         finishScan(state);

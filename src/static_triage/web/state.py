@@ -14,6 +14,10 @@ ACTIVE_STATES = {
     "stopping",
     "cancelling",
 }
+# The activity log keeps only the newest messages, so a long scan of a big
+# folder can't grow the app's memory (or every status reply) without limit.
+MAX_EVENTS = 1000
+
 TERMINAL_STATES = {
     "completed",
     "failed",
@@ -108,9 +112,12 @@ class WebScanState:
     message: str = "Scan queued."
     created_at: str = field(default_factory=now)
     updated_at: str = field(default_factory=now)
-    events: list[dict[str, str]] = field(
+    events: list[dict[str, Any]] = field(
         default_factory=list
     )
+    # Messages ever added, including ones dropped from the log. Each event's
+    # "seq" is its number, so the app can ask for only the new ones.
+    event_count: int = 0
     # Planned file order per analyzer stage, with each file's status.
     queues: dict[str, dict[str, Any]] = field(
         default_factory=dict
@@ -124,5 +131,20 @@ class WebScanState:
     # saved report's "resources" block is authoritative afterwards.
     resource_profile: dict[str, Any] | None = None
 
-    def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+    def add_event(self, time: str, message: str) -> None:
+        self.event_count += 1
+        self.events.append(
+            {"seq": self.event_count, "time": time, "message": message}
+        )
+        if len(self.events) > MAX_EVENTS:
+            del self.events[: len(self.events) - MAX_EVENTS]
+
+    def to_dict(self, since: int | None = None) -> dict[str, Any]:
+        """The scan's state; with since, only the events after that number."""
+
+        data = asdict(self)
+        if since is not None:
+            data["events"] = [
+                event for event in data["events"] if event["seq"] > since
+            ]
+        return data

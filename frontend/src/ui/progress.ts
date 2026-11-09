@@ -109,15 +109,24 @@ function activityEventLine(
 
 export function activityText(
   events: readonly ScanEvent[],
+  total?: number,
 ): string {
   if (events.length === 0) {
     return "[waiting] No activity received yet.";
   }
 
-  return events
-    .map(activityEventLine)
-    .join("\n");
+  const lines = events.map(activityEventLine);
+  if (typeof total === "number" && total > events.length) {
+    lines.unshift(
+      `[earlier messages hidden] Showing the newest ${events.length.toLocaleString()} `
+      + `of ${total.toLocaleString()} messages; the report has every file's result.`,
+    );
+  }
+  return lines.join("\n");
 }
+
+// Only rebuild the activity text when a new message has arrived.
+let renderedActivity = "";
 
 function scrollActivityToBottom(): void {
   liveActivityPanel.scrollTop =
@@ -155,8 +164,15 @@ export function renderLiveActivity(
     return;
   }
 
+  const last = state.events[state.events.length - 1];
+  const key = `${state.scan_id}:${state.events.length}:${last?.seq ?? ""}:${last?.time ?? ""}`;
+  if (key === renderedActivity) {
+    return;
+  }
+  renderedActivity = key;
   liveActivityPanel.textContent = activityText(
     state.events,
+    state.event_count,
   );
 
   if (activityAutoScroll) {
