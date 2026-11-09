@@ -198,17 +198,23 @@ def build_coverage(
     capa_result: CapaBatchResult | None,
     floss_result: FlossBatchResult | None,
     stopped: bool = False,
+    changed_paths: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Says, for every regular file, which analyzers fully checked it."""
 
     regular = [entry for entry in entries if entry.kind == EntryKind.REGULAR_FILE]
     readable = [entry for entry in regular if entry.state == EntryState.INVENTORIED]
+    changed = set(changed_paths)
+    inventory_gaps = {
+        entry.relative_path: _inventory_gap(entry)
+        for entry in regular
+        if entry.state != EntryState.INVENTORIED
+    }
+    for path in changed:
+        # Its results describe the file as it was when first read.
+        inventory_gaps[path] = (FAILED, "changed while the scan was running")
     by_analyzer: dict[str, dict[str, Outcome]] = {
-        "inventory": {
-            entry.relative_path: _inventory_gap(entry)
-            for entry in regular
-            if entry.state != EntryState.INVENTORIED
-        },
+        "inventory": inventory_gaps,
         "clamav": _clamav(readable, clamav_result, tools, stopped),
         "yara": _yara(readable, yara_result, tools, stopped),
         "capa": _capa(
@@ -258,6 +264,18 @@ def build_coverage(
             "YARA-X had no rule packs, so it isn't counted: "
             + (yara_result.error or "no rule packs are installed").rstrip(".")
             + ". Install them with \"mantha-ray packs update\"."
+        )
+    reused = [
+        (label, sum(1 for r in batch.results if r.cached_from))
+        for label, batch in (("capa", capa_result), ("FLOSS", floss_result))
+        if batch is not None
+    ]
+    reused = [(label, count) for label, count in reused if count]
+    if reused:
+        notes.append(
+            "Reused from earlier scans of identical files (same SHA-256): "
+            + ", ".join(f"{count} {label} {'result' if count == 1 else 'results'}" for label, count in reused)
+            + ". They count as checked; report.json says which case each came from."
         )
     if partially:
         notes.append(

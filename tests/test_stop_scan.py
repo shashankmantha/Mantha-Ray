@@ -39,6 +39,19 @@ def entry(path, size):
     )
 
 
+
+_cache_home = tempfile.TemporaryDirectory()
+
+
+def setUpModule() -> None:
+    # Scans started here save results to the cache; keep it out of the real home.
+    os.environ["MANTHA_RAY_CACHE_HOME"] = _cache_home.name
+
+
+def tearDownModule() -> None:
+    os.environ.pop("MANTHA_RAY_CACHE_HOME", None)
+    _cache_home.cleanup()
+
 class StopTestCase(unittest.TestCase):
     def setUp(self) -> None:
         stop_request.reset()

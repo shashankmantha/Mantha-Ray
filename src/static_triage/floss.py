@@ -6,6 +6,7 @@ import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .file_progress import FileProgress, QueueCallback
@@ -131,6 +132,9 @@ class FlossResult:
     needs_more_memory: bool = False
     # Ended early because the user stopped the scan.
     stopped_by_user: bool = False
+    # Reused from an earlier scan of an identical file (same SHA-256):
+    # the case, date, original path and duration of the real analysis.
+    cached_from: dict[str, Any] | None = None
     # "emulation" (FLOSS proper) or "plain" (fast pass for big files).
     mode: str = EMULATION
     # For plain mode: whether the whole file was read.
@@ -171,6 +175,7 @@ class FlossResult:
             "memory_estimate_mib": self.memory_estimate_mib,
             "needs_more_memory": self.needs_more_memory,
             "stopped_by_user": self.stopped_by_user,
+            "cached_from": self.cached_from,
             "mode": self.mode,
             "fully_scanned": self.fully_scanned,
         }
@@ -195,6 +200,8 @@ class FlossBatchResult:
     workers: int = 1
     file_timeout_policy: dict[str, float] | None = None
     memory_policy: dict[str, Any] | None = None
+    # Unique files whose result came from the cache instead of a new run.
+    cached_files: int = 0
     skipped_size_paths: tuple[str, ...] = ()
 
     @property
@@ -223,6 +230,7 @@ class FlossBatchResult:
                 else self.eligible_files
             ),
             "attempted_files": self.attempted_files,
+            "cached_files": self.cached_files,
             "duplicate_analyses_avoided": (
                 self.duplicate_analyses_avoided
             ),
@@ -262,6 +270,8 @@ class FlossSelection:
     skipped_due_to_limit: int
     groups: tuple[AnalysisGroup, ...] = ()
     unique_eligible_count: int = 0
+    # Groups with a reusable earlier result; never analyzed again.
+    cached_groups: tuple[AnalysisGroup, ...] = ()
     oversized_paths: tuple[str, ...] = ()
 
 
@@ -625,6 +635,7 @@ def select_floss_entries(
     entries: list[InventoryEntry],
     *,
     max_files: int,
+    cached: Mapping[str, FlossResult] | None = None,
 ) -> FlossSelection:
     """Select inventory-approved PE files for FLOSS."""
 
@@ -644,7 +655,14 @@ def select_floss_entries(
         )
     ]
 
-    groups = prioritize_groups(group_entries_by_sha256(eligible))
+    all_groups = prioritize_groups(group_entries_by_sha256(eligible))
+    # Files with an earlier full result don't use the file cap or time budget.
+    cached_groups = tuple(
+        group for group in all_groups
+        if cached and group.representative.sha256 in cached
+    )
+    cached_ids = {id(group) for group in cached_groups}
+    groups = [group for group in all_groups if id(group) not in cached_ids]
     # Big files get the fast plain-strings pass, first, so they are always
     # covered; they don't count against the file cap.
     plain_groups = [
@@ -666,7 +684,8 @@ def select_floss_entries(
             len(group.entries) for group in emulation_groups[max_files:]
         ),
         groups=selected_groups,
-        unique_eligible_count=len(groups),
+        unique_eligible_count=len(all_groups),
+        cached_groups=cached_groups,
     )
 
 
@@ -730,6 +749,7 @@ def run_floss_batch(
     file_timeout_max_seconds: float | None = None,
     memory_budget_mib: int | None = None,
     on_queue: QueueCallback | None = None,
+    cached: Mapping[str, FlossResult] | None = None,
 ) -> FlossBatchResult:
     """Run FLOSS over a bounded set of eligible PE files."""
 
@@ -766,6 +786,7 @@ def run_floss_batch(
     selection = select_floss_entries(
         entries,
         max_files=max_files,
+        cached=cached,
     )
 
     started = time.monotonic()
@@ -905,6 +926,14 @@ def run_floss_batch(
             ),
         )
         for item in run.finished
+    ] + [
+        replace(
+            cached[group.representative.sha256],
+            relative_path=group.representative.relative_path,
+            reused_for=group.reused_paths,
+        )
+        for group in selection.cached_groups
+        if cached is not None
     ]
     analyzed_groups = [item.group for item in run.finished]
 
@@ -975,7 +1004,8 @@ def run_floss_batch(
         ),
         complete=complete,
         eligible_files=selection.eligible_count,
-        attempted_files=len(results),
+        attempted_files=len(run.finished),
+        cached_files=len(selection.cached_groups),
         skipped_due_to_limit=(
             selection.skipped_due_to_limit
         ),

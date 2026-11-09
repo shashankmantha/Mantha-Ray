@@ -18,6 +18,7 @@ from .capa_risk import (
 from .clamav import ClamAVResult, ClamAVStatus
 from .config import ScanConfig
 from .coverage import build_coverage, headline
+from .integrity import IntegrityResult
 from .deduplication import group_entries_by_sha256
 from .floss import FlossBatchResult
 from .yara_scan import YaraBatchResult
@@ -106,6 +107,7 @@ def _determine_status(
     floss_result: FlossBatchResult | None,
     summary: InventorySummary,
     yara_result: YaraBatchResult | None = None,
+    integrity: IntegrityResult | None = None,
 ) -> OverallStatus:
     """Calculate the strongest supported case status."""
 
@@ -140,6 +142,7 @@ def _determine_status(
     inventory_complete = (
         summary.errors == 0
         and summary.limit_exceeded == 0
+        and (integrity is None or not integrity.changed)
     )
 
     if not analyzers_complete or not inventory_complete:
@@ -204,6 +207,7 @@ def write_case_artifacts(
     yara_result: YaraBatchResult | None = None,
     resources: dict[str, Any] | None = None,
     stage_timings: dict[str, Any] | None = None,
+    integrity: IntegrityResult | None = None,
 ) -> dict[str, Any]:
     """Write the complete inventory-milestone artifact set."""
 
@@ -406,6 +410,13 @@ def write_case_artifacts(
             "completely inventoried"
         )
 
+    if integrity is not None and integrity.changed:
+        incomplete_reasons.append(
+            f"{len(integrity.changed)} "
+            + ("file" if len(integrity.changed) == 1 else "files")
+            + " changed while the scan was running"
+        )
+
     manifest = {
         "schema_version": SCHEMA_VERSION,
         "case_id": case_id,
@@ -433,6 +444,7 @@ def write_case_artifacts(
         floss_result,
         summary,
         yara_result,
+        integrity,
     )
 
     coverage = build_coverage(
@@ -443,6 +455,7 @@ def write_case_artifacts(
         capa_result=capa_result,
         floss_result=floss_result,
         stopped=stop_request.requested(),
+        changed_paths=integrity.changed if integrity is not None else (),
     )
 
     report = {
@@ -455,6 +468,7 @@ def write_case_artifacts(
         ),
         "summary": summary.to_dict(),
         "coverage": coverage,
+        "integrity": integrity.to_dict() if integrity is not None else None,
         "resources": resources,
         "stage_timings": stage_timings or {},
         "warnings": warnings,
@@ -887,6 +901,23 @@ def _render_yara(yara: dict[str, Any] | None) -> list[str]:
     return lines
 
 
+def _integrity_text(integrity: dict[str, Any]) -> str:
+    checked = integrity.get("checked", 0)
+    if integrity.get("skipped"):
+        return f"re-check stopped early after {checked:,} files."
+    if integrity.get("changed_count"):
+        files = ", ".join(_markdown_code(path) for path in integrity.get("changed", [])[:20])
+        return (
+            f"**{integrity['changed_count']:,} changed during the scan** "
+            f"(their results describe an earlier version): {files}"
+        )
+    unreadable = integrity.get("unreadable_count", 0)
+    text = f"all {checked:,} files re-hashed after analysis; none changed."
+    if unreadable:
+        text += f" {unreadable:,} could no longer be read."
+    return text
+
+
 COVERAGE_STATUS_LABELS = {
     "done": "done",
     "finding": "finding",
@@ -972,6 +1003,11 @@ def _render_markdown(
         *(
             [f"- Coverage: {headline(report['coverage'])} (details under Coverage)"]
             if report.get("coverage")
+            else []
+        ),
+        *(
+            [f"- File hashes: {_integrity_text(report['integrity'])}"]
+            if report.get("integrity")
             else []
         ),
         f"- Uncertainty: {report['uncertainty']}",

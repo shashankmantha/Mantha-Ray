@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import io
 import json
 import subprocess
@@ -40,6 +41,19 @@ def _command(request: DockerScanRequest) -> list[str]:
 def _flag(command: list[str], name: str) -> str:
     return command[command.index(name) + 1]
 
+
+
+_cache_home = tempfile.TemporaryDirectory()
+
+
+def setUpModule() -> None:
+    # Scans started here save results to the cache; keep it out of the real home.
+    os.environ["MANTHA_RAY_CACHE_HOME"] = _cache_home.name
+
+
+def tearDownModule() -> None:
+    os.environ.pop("MANTHA_RAY_CACHE_HOME", None)
+    _cache_home.cleanup()
 
 class DockerCommandProfileTests(unittest.TestCase):
     def test_default_request_reproduces_pre_profile_command(self) -> None:

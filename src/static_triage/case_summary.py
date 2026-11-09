@@ -150,10 +150,12 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     too_big = sum(1 for r in results if r.get("needs_more_memory") is True)
     plain = sum(1 for r in results if r.get("mode") == "plain")
     unique = data.get("unique_eligible_files", data.get("eligible_files", 0))
+    cached = sum(1 for r in results if r.get("cached_from"))
     counts = [
         f"{unique} unique",
-        f"{len(results)} analyzed",
-        f"{completed} completed",
+        f"{len(results) - cached} analyzed",
+        *([f"{cached} reused from cache"] if cached else []),
+        f"{completed - cached} completed",
         f"{timed_out} timed out",
     ]
     if stopped:
@@ -207,6 +209,8 @@ def analyzer_lines(name: str, data: object) -> list[str]:
             notes.append("stopped by you")
         elif status == "stopped":
             notes.append("budget ran out")
+        if result.get("cached_from"):
+            notes.append("reused from cache")
         if result.get("mode") == "plain":
             kept = result.get("strings")
             notes.append(
@@ -263,6 +267,24 @@ def coverage_gap_lines(data: object) -> list[str]:
     return lines
 
 
+def integrity_line(data: object) -> str:
+    if not isinstance(data, dict):
+        return "not re-checked (older case)"
+    checked = data.get("checked")
+    changed = data.get("changed_count") or 0
+    unreadable = data.get("unreadable_count") or 0
+    if data.get("skipped"):
+        return f"re-check stopped early ({checked} checked)"
+    if changed or unreadable:
+        parts = []
+        if changed:
+            parts.append(f"{changed} CHANGED during the scan")
+        if unreadable:
+            parts.append(f"{unreadable} unreadable")
+        return f"re-checked {checked}: " + ", ".join(parts)
+    return f"all {checked:,} re-checked after analysis, none changed" if isinstance(checked, int) else "re-checked"
+
+
 def summarize(case: Path) -> str:
     report = load_report(case)
     status = clean(report.get("status", "unknown"), 40).replace("_", " ").title()
@@ -281,6 +303,7 @@ def summarize(case: Path) -> str:
         f"ClamAV   {clean(clamav.get('status', 'not recorded'), 20)}"
         + (f" · {len(findings)} detection(s)" if findings else ""),
         f"YARA-X   {yara_line(analyzers.get('yara'))}",
+        f"Hashes   {integrity_line(report.get('integrity'))}",
         "",
         *analyzer_lines("capa", analyzers.get("capa")),
         "",

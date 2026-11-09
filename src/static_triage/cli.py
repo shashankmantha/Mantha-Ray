@@ -161,6 +161,17 @@ def build_parser(
         help="go back to the previously installed bundle",
     )
 
+    cache = subparsers.add_parser(
+        "cache",
+        help="inspect or clear saved capa/FLOSS results reused on identical files",
+    )
+    cache_actions = cache.add_subparsers(dest="cache_command", required=True)
+    cache_actions.add_parser("status", help="show how many results are saved and where")
+    cache_actions.add_parser(
+        "clear",
+        help="delete every saved result, so every file is analyzed afresh",
+    )
+
     # Runs inside the scan image: compiles the bundle mounted at /packs.
     subparsers.add_parser("packs-check", help=argparse.SUPPRESS)
 
@@ -428,6 +439,9 @@ def main(
     if args.command == "web":
         return _run_web(args)
 
+    if args.command == "cache":
+        return _cache_command(args.cache_command)
+
     if args.command == "packs":
         from .packs.commands import run_packs_command
 
@@ -507,6 +521,26 @@ def main(
         flush=True,
     )
 
+    return 0
+
+
+def _cache_command(action: str) -> int:
+    from . import result_cache
+
+    if action == "clear":
+        removed = result_cache.clear()
+        print(
+            f"Deleted {removed} saved "
+            + ("result" if removed == 1 else "results")
+            + ". Earlier cases won't be added again; new scans start saving afresh."
+        )
+        return 0
+    info = result_cache.status()
+    entries = info["entries"]
+    print(f"Saved results: {entries.get('capa', 0)} capa, {entries.get('floss', 0)} FLOSS")
+    print(f"Size:          {info['bytes'] / 1024 / 1024:.1f} MiB")
+    print(f"Folder:        {info['path']}")
+    print("A result is reused only for a file with the same SHA-256, analyzed by the same tool version.")
     return 0
 
 

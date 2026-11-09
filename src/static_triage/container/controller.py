@@ -7,6 +7,7 @@ import subprocess
 import threading
 import time
 from dataclasses import replace
+from pathlib import Path
 from typing import Callable
 from uuid import uuid4
 
@@ -18,6 +19,7 @@ from .command import (
     build_docker_command,
     validate_request,
 )
+from .. import result_cache
 from ..packs.local import has_local, local_root
 from ..packs.store import current_install_dir
 from ..resource_profiles import (
@@ -40,6 +42,48 @@ STOP_GRACE_SECONDS = 180
 # Before this, the Python process may not have installed its handler yet,
 # and there is nothing worth saving: a stop becomes a cancel.
 STOP_MIN_RUNTIME_SECONDS = 15
+
+
+def _prepare_cache(
+    results_directory: Path,
+    on_status: Callable[[str], None] | None,
+) -> Path | None:
+    """Add finished cases to the result cache, then return the cache folder.
+
+    Picks up cases whose window closed before they finished, too.
+    """
+
+    try:
+        home = result_cache.cache_home()
+        home.mkdir(parents=True, exist_ok=True)
+        added = result_cache.ingest_results_directory(
+            results_directory.expanduser(), home,
+        )
+    except OSError:
+        return None
+    if added and on_status is not None:
+        on_status(
+            f"Saved {added} earlier capa/FLOSS "
+            + ("result" if added == 1 else "results")
+            + " for reuse on identical files."
+        )
+    return home
+
+
+def _remember_results(
+    case_directory: Path,
+    on_status: Callable[[str], None] | None,
+) -> None:
+    try:
+        added = result_cache.ingest_case(case_directory)
+    except (OSError, ValueError, UnicodeDecodeError):
+        return
+    if added and on_status is not None:
+        on_status(
+            f"Saved {added} capa/FLOSS "
+            + ("result" if added == 1 else "results")
+            + " so the next scan can reuse them."
+        )
 
 
 class DockerScanController:
@@ -257,6 +301,13 @@ class DockerScanController:
             request = replace(
                 request,
                 local_packs_directory=local_root(),
+            )
+        if request.cache_directory is None:
+            request = replace(
+                request,
+                cache_directory=_prepare_cache(
+                    request.results_directory, on_status,
+                ),
             )
 
         validated = validate_request(
@@ -515,11 +566,13 @@ class DockerScanController:
                 "loading the report..."
             )
 
-        return parse_scan_output(
+        result = parse_scan_output(
             stdout,
             stderr,
             validated.results_directory,
         )
+        _remember_results(result.case_directory, on_status)
+        return result
 
     def stop(self) -> str:
         """Ask the running scan to stop and still write its report.

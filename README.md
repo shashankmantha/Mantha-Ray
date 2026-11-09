@@ -79,6 +79,7 @@ Next to the verdict, every report says how many files were **fully checked**: ev
   - a `noexec` temporary filesystem;
   - the sample mounted read-only.
 - **No overlaps:** the source, results and rule pack folders can't overlap.
+- **The result cache is read-only to scans.** The host adds results from finished cases, and only for files that case inventoried, under their own hash. The container can read the cache but never write to it.
 - **The web interface** listens on loopback only, needs a per-launch session token, and checks the request origin. It sends a strict Content Security Policy, and puts filenames and strings from samples into the page as text, never as HTML.
 - **Rule packs are untrusted until proven otherwise.** An install or update:
   1. verifies the minisign signature against the release key in this repository;
@@ -149,6 +150,20 @@ Big game folders need High: on Balanced, capa doesn't reach every program in a m
 ./scripts/summary.sh               # short summary of the newest case
 ```
 
+### Reusing earlier results
+
+capa and FLOSS are the slow stages, so their complete results are saved by each file's SHA-256 and reused when a later scan finds an identical file. Reused results are marked in the report with the case they came from, and don't count against the file cap or time budget, so a second scan of the same folder spends its whole budget on the files the first one missed.
+
+- **A changed file is always analyzed again.** One changed byte gives a different hash, so it can't match an old result.
+- **Only finished work is saved.** Timeouts, failures and plain-strings-only passes never are, so those files get another try. ClamAV and YARA-X always run fresh.
+- **A new capa or FLOSS version** (or different FLOSS string limits) means fresh analysis.
+- **After every scan,** each file is hashed again and compared with the inventory. A file that changed while it was being scanned makes the case Incomplete and is listed by name.
+
+```bash
+mantha-ray cache status   # how many results are saved, and where
+mantha-ray cache clear    # delete them all, so every file is analyzed afresh
+```
+
 ## Rule packs
 
 YARA rules ship as signed bundles built by [Mantha Hermit](https://github.com/shashankmantha/mantha-hermit) and published as releases of [mantha-packs](https://github.com/shashankmantha/mantha-packs).
@@ -208,7 +223,7 @@ Filenames and strings in reports come from the sample. Treat them as untrusted e
 
 Working towards a full scan of large game folders where every file is either proven identical to a known-good copy or fully analyzed:
 
-- **Result cache by SHA-256**, and an overnight "exhaustive" profile.
+- **An overnight "exhaustive" profile.**
 - **Reference comparison** against a clean copy, such as a Steam install, so only added or changed files need full analysis.
 - **Known-good library hashes** (OpenAL, FFmpeg, Visual C++, `steam_api`) and a wrong-hash check.
 - **Safe archive unpacking**, and script analysis (Lua and others).

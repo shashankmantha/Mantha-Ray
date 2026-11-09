@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any
 
 from .capa_risk import (
@@ -123,6 +124,9 @@ class CapaResult:
     needs_more_memory: bool = False
     # Ended early because the user stopped the scan.
     stopped_by_user: bool = False
+    # Reused from an earlier scan of an identical file (same SHA-256):
+    # the case, date, original path and duration of the real analysis.
+    cached_from: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -150,6 +154,7 @@ class CapaResult:
             "memory_estimate_mib": self.memory_estimate_mib,
             "needs_more_memory": self.needs_more_memory,
             "stopped_by_user": self.stopped_by_user,
+            "cached_from": self.cached_from,
         }
 
     @property
@@ -181,6 +186,8 @@ class CapaBatchResult:
     workers: int = 1
     file_timeout_policy: dict[str, float] | None = None
     memory_policy: dict[str, Any] | None = None
+    # Unique files whose result came from the cache instead of a new run.
+    cached_files: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -197,6 +204,7 @@ class CapaBatchResult:
                 else self.eligible_files
             ),
             "attempted_files": self.attempted_files,
+            "cached_files": self.cached_files,
             "duplicate_analyses_avoided": (
                 self.duplicate_analyses_avoided
             ),
@@ -239,6 +247,8 @@ class CapaSelection:
     skipped_due_to_limit: int
     groups: tuple[AnalysisGroup, ...] = ()
     unique_eligible_count: int = 0
+    # Groups with a reusable earlier result; never analyzed again.
+    cached_groups: tuple[AnalysisGroup, ...] = ()
 
 
 def _extract_framework_ids(
@@ -575,6 +585,7 @@ def select_capa_entries(
     entries: list[InventoryEntry],
     *,
     max_files: int,
+    cached: Mapping[str, CapaResult] | None = None,
 ) -> CapaSelection:
     """Select inventory-approved binaries for capa."""
 
@@ -594,9 +605,16 @@ def select_capa_entries(
         )
     ]
 
-    groups = prioritize_groups(
+    all_groups = prioritize_groups(
         group_entries_by_sha256(eligible)
     )
+    # Files with an earlier result don't use the file cap or time budget.
+    cached_groups = tuple(
+        group for group in all_groups
+        if cached and group.representative.sha256 in cached
+    )
+    cached_ids = {id(group) for group in cached_groups}
+    groups = [group for group in all_groups if id(group) not in cached_ids]
     selected_groups = groups[:max_files]
     selected = tuple(
         group.representative
@@ -613,7 +631,8 @@ def select_capa_entries(
             )
         ),
         groups=selected_groups,
-        unique_eligible_count=len(groups),
+        unique_eligible_count=len(all_groups),
+        cached_groups=cached_groups,
     )
 
 
@@ -631,6 +650,7 @@ def run_capa_batch(
     file_timeout_max_seconds: float | None = None,
     memory_budget_mib: int | None = None,
     on_queue: QueueCallback | None = None,
+    cached: Mapping[str, CapaResult] | None = None,
 ) -> CapaBatchResult:
     """Run capa over a bounded set of eligible binaries."""
 
@@ -657,6 +677,7 @@ def run_capa_batch(
     selection = select_capa_entries(
         entries,
         max_files=max_files,
+        cached=cached,
     )
 
     started = time.monotonic()
@@ -758,6 +779,14 @@ def run_capa_batch(
             ),
         )
         for item in run.finished
+    ] + [
+        replace(
+            cached[group.representative.sha256],
+            relative_path=group.representative.relative_path,
+            reused_for=group.reused_paths,
+        )
+        for group in selection.cached_groups
+        if cached is not None
     ]
     analyzed_groups = [item.group for item in run.finished]
 
@@ -828,7 +857,8 @@ def run_capa_batch(
         ),
         complete=complete,
         eligible_files=selection.eligible_count,
-        attempted_files=len(results),
+        attempted_files=len(run.finished),
+        cached_files=len(selection.cached_groups),
         skipped_due_to_limit=(
             selection.skipped_due_to_limit
         ),

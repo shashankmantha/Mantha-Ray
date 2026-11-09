@@ -17,9 +17,13 @@ from .clamav import scan_timeout_seconds as clamav_scan_timeout
 from .config import ScanConfig
 from .floss import FlossBatchResult, run_floss_batch
 from . import __version__
+from . import result_cache
+from .capa import _CAPA_ROUTING_CLASSES
+from .floss import _FLOSS_ROUTING_CLASSES
+from .integrity import verify_hashes
 from .yara_scan import PACKS_MOUNT, YaraBatchResult, run_yara_stage, summary_message
 from .inventory import inventory_tree
-from .models import EntryKind, ToolInfo
+from .models import EntryKind, EntryState, InventoryEntry, ToolInfo
 from .preflight import inspect_tools
 from .reporting import write_case_artifacts
 from .scan_record import (
@@ -106,6 +110,17 @@ def _available_tool(
     return None
 
 
+def _hashes(entries: list[InventoryEntry], routing: frozenset | set) -> list[str]:
+    return [
+        entry.sha256
+        for entry in entries
+        if entry.kind == EntryKind.REGULAR_FILE
+        and entry.state == EntryState.INVENTORIED
+        and entry.routing_class in routing
+        and entry.sha256
+    ]
+
+
 def run_inventory_scan(
     staging_subdirectory: str,
     config: ScanConfig,
@@ -113,6 +128,7 @@ def run_inventory_scan(
     on_progress: ProgressCallback | None = None,
     on_queue: StageQueueCallback | None = None,
     packs_root: Path = PACKS_MOUNT,
+    cache_root: Path | None = result_cache.CACHE_MOUNT,
 ) -> ScanResult:
     """Run inventory, ClamAV, YARA-X, capa, and FLOSS analysis."""
 
@@ -338,6 +354,20 @@ def run_inventory_scan(
             "running",
             "capa is analyzing eligible binaries...",
         )
+        cached_capa = result_cache.load_capa(
+            cache_root,
+            _hashes(entries, _CAPA_ROUTING_CLASSES),
+            tool_version=capa_tool.version,
+        )
+        if cached_capa:
+            _emit_progress(
+                on_progress,
+                "capa",
+                "running",
+                f"capa: reusing {len(cached_capa)} earlier "
+                + ("result" if len(cached_capa) == 1 else "results")
+                + " for identical files (same SHA-256).",
+            )
 
         try:
             capa_result = run_capa_batch(
@@ -378,6 +408,7 @@ def run_inventory_scan(
                     if on_queue is not None
                     else None
                 ),
+                cached=cached_capa,
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -430,6 +461,22 @@ def run_inventory_scan(
             "running",
             "FLOSS is extracting eligible strings...",
         )
+        cached_floss = result_cache.load_floss(
+            cache_root,
+            _hashes(entries, _FLOSS_ROUTING_CLASSES),
+            tool_version=floss_tool.version,
+            max_strings=config.limits.floss_max_strings,
+            max_string_chars=config.limits.floss_max_string_chars,
+        )
+        if cached_floss:
+            _emit_progress(
+                on_progress,
+                "floss",
+                "running",
+                f"FLOSS: reusing {len(cached_floss)} earlier "
+                + ("result" if len(cached_floss) == 1 else "results")
+                + " for identical files (same SHA-256).",
+            )
 
         try:
             floss_result = run_floss_batch(
@@ -477,6 +524,7 @@ def run_inventory_scan(
                     if on_queue is not None
                     else None
                 ),
+                cached=cached_floss,
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -506,6 +554,22 @@ def run_inventory_scan(
                     "incomplete",
                     "FLOSS analysis was incomplete.",
                 )
+
+    _emit_progress(
+        on_progress,
+        "report",
+        "running",
+        "Re-checking every file's hash to confirm nothing changed during the scan...",
+    )
+    integrity = verify_hashes(entries, target)
+    if integrity.changed:
+        warnings.append(
+            f"{len(integrity.changed)} "
+            + ("file" if len(integrity.changed) == 1 else "files")
+            + " changed while they were being scanned, so their results "
+            "describe an earlier version; scan the folder again when nothing "
+            "is modifying it."
+        )
 
     completed = _utc_now()
 
@@ -550,6 +614,7 @@ def run_inventory_scan(
             else None
         ),
         stage_timings=stage_timer.to_dict(),
+        integrity=integrity,
     )
 
     _emit_progress(

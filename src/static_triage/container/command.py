@@ -38,6 +38,8 @@ class DockerScanRequest:
     # own rule files (local packs), mounted read-only at /packs-local.
     packs_directory: Path | None = None
     local_packs_directory: Path | None = None
+    # Earlier capa and FLOSS results, by file hash; mounted read-only at /cache.
+    cache_directory: Path | None = None
 
     @property
     def timeout_seconds(self) -> int:
@@ -151,7 +153,31 @@ def validate_request(
         resource_profile=request.resource_profile,
         packs_directory=packs,
         local_packs_directory=local_packs,
+        cache_directory=_cache_folder(request.cache_directory, source, results),
     )
+
+
+def _cache_folder(
+    folder: Path | None,
+    source: Path,
+    results: Path,
+) -> Path | None:
+    """The cache folder if it can be mounted safely; otherwise scan without it."""
+
+    if folder is None:
+        return None
+    try:
+        folder = folder.expanduser().resolve(strict=True)
+    except OSError:
+        return None
+    if (
+        not folder.is_dir()
+        or "," in str(folder)
+        or _paths_overlap(folder, source)
+        or _paths_overlap(folder, results)
+    ):
+        return None
+    return folder
 
 
 def _pack_folder(
@@ -258,6 +284,16 @@ def build_docker_command(
                 "target=/packs-local,readonly",
             ]
             if request.local_packs_directory is not None
+            else []
+        ),
+        *(
+            [
+                "--mount",
+                "type=bind,source="
+                f"{request.cache_directory},"
+                "target=/cache,readonly",
+            ]
+            if request.cache_directory is not None
             else []
         ),
         request.image,
