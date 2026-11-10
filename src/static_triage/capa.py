@@ -16,6 +16,8 @@ from .capa_risk import (
     CapabilityRisk,
     CapaRiskSummary,
     assess_capability,
+    find_combinations,
+    summarize_files,
     summarize_risk,
 )
 from .file_progress import FileProgress, QueueCallback
@@ -162,8 +164,10 @@ class CapaResult:
         """Summarize unique capa capabilities for this file."""
 
         return summarize_risk(
-            capability.risk
-            for capability in self.capabilities
+            (capability.risk for capability in self.capabilities),
+            find_combinations(
+                (c.name, c.namespace, c.attack_ids) for c in self.capabilities
+            ),
         )
 
 
@@ -229,12 +233,12 @@ class CapaBatchResult:
 
     @property
     def risk(self) -> CapaRiskSummary:
-        """Summarize unique capabilities across the analyzed case."""
+        """The worst single file, with every file's suspicious combinations."""
 
-        return summarize_risk(
-            capability.risk
+        return summarize_files(
+            (result.relative_path, result.risk)
             for result in self.results
-            for capability in result.capabilities
+            if result.capabilities
         )
 
 

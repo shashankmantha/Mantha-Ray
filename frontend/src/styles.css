@@ -176,6 +176,10 @@ a:focus-visible {
   background: #ff6078;
 }
 
+.scan-dot-alert {
+  background: #ff8a3d;
+}
+
 .scan-dot-running {
   background: #68b8ff;
 }
@@ -324,6 +328,13 @@ h2 {
   border-color: #9b7227;
   color: #ffd075;
   background: #463516;
+}
+
+/* Suspicious Capabilities: stronger than Needs Review, short of a detection. */
+.verdict-alert {
+  border-color: #b5571f;
+  color: #ffb27a;
+  background: #4a2410;
 }
 
 .verdict-running {
@@ -512,7 +523,15 @@ h2 {
 .local-rules-add {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: stretch;
   gap: 0.5rem;
+}
+
+/* Same height for the picker, the dropdown and the button. */
+.local-rules-add .form-control,
+.local-rules-add .form-select,
+.local-rules-add .btn {
+  min-height: 38px;
 }
 
 #local-rule-message[data-kind="error"] {
@@ -559,12 +578,48 @@ h2 {
   font-weight: 700;
 }
 
-.resource-base .form-select {
-  width: auto;
+/* Every dropdown matches the dark text fields; the arrow is drawn light. */
+.form-select {
   border-color: #34436f;
   border-radius: 0;
   color: #e8edff;
   background-color: #091127;
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3e%3cpath fill='none' stroke='%238894ba' stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='m2 5 6 6 6-6'/%3e%3c/svg%3e");
+  color-scheme: dark;
+}
+
+.form-select:focus {
+  border-color: #68b8ff;
+  box-shadow: none;
+}
+
+.form-select option {
+  color: #e8edff;
+  background: #091127;
+}
+
+.resource-base .form-select {
+  width: auto;
+}
+
+/* The file picker's built-in button, in the style of the outline buttons. */
+.form-control[type="file"] {
+  color: #aeb8d8;
+  color-scheme: dark;
+}
+
+.form-control[type="file"]::file-selector-button {
+  margin-right: 0.75rem;
+  border: 0;
+  border-right: 1px solid #34436f;
+  color: #cbd4f4;
+  background: #14203f;
+  font-weight: 700;
+}
+
+.form-control[type="file"]:hover:not(:disabled):not([readonly])::file-selector-button {
+  color: #07101f;
+  background: #77c4ff;
 }
 
 .resource-changed {
@@ -1119,13 +1174,45 @@ h2 {
 /* A static ring instead of a pulse: the app window's Chromium never frees
    the drawing memory of an animation that runs for hours. */
 .stage-state-running .stage-marker {
-  border-color: #9b87ff;
+  border-color: #ffe07a;
+  background: #f5c542;
+  animation: stage-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes stage-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/* A plain bar that moves only when a file finishes; no stripes or animation. */
+.stage-progress {
+  height: 6px;
+  margin-top: 0.75rem;
+  background: #1b2440;
+  border: 1px solid #2c3759;
+}
+
+.stage-progress-fill {
+  width: 0;
+  height: 100%;
   background: #7457e8;
-  box-shadow: 0 0 0 3px rgba(155, 135, 255, 0.35);
+}
+
+.stage-progress-label {
+  display: block;
+  margin-top: 0.35rem;
+  color: #8894ba;
+  font-size: 0.75rem;
 }
 
 .stage-state-running .stage-copy small {
-  color: #a99aff;
+  color: #ffd75e;
 }
 
 .stage-state-completed .stage-marker {

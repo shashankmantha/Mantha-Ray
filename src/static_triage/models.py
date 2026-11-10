@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 
-SCHEMA_VERSION = "0.2.11"
+SCHEMA_VERSION = "0.2.12"
 
 
 class RoutingClass(StrEnum):
@@ -49,6 +49,8 @@ class OverallStatus(StrEnum):
 
     KNOWN_DETECTION = "known_detection"
     HIGH_CONCERN = "high_concern"
+    # capa found a suspicious combination of capabilities in one file.
+    SUSPICIOUS_CAPABILITIES = "suspicious_capabilities"
     NEEDS_REVIEW = "needs_review"
     NO_INDICATORS_DETECTED = "no_indicators_detected"
     INCOMPLETE = "incomplete"

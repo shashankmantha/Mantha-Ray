@@ -129,6 +129,10 @@ def _determine_status(
     if yara_counts["threat"]:
         return OverallStatus.HIGH_CONCERN
 
+    # So is a suspicious combination of capabilities in a file capa finished.
+    if capa_result is not None and capa_result.risk.suspicious:
+        return OverallStatus.SUSPICIOUS_CAPABILITIES
+
     analyzers_complete = (
         clamav_result is not None
         and clamav_result.complete
@@ -154,9 +158,6 @@ def _determine_status(
         result.strings
         for result in floss_result.results
     )
-
-    if capa_risk.high_concern:
-        return OverallStatus.HIGH_CONCERN
 
     if (
         summary.review_flags
@@ -1134,16 +1135,12 @@ def _render_markdown(
         )
     )
 
-    high_concern = bool(
-        capa_risk.get(
-            "high_concern",
-            False,
-        )
-    )
+    combinations = capa_risk.get("combinations") or []
 
-    if high_concern:
+    if combinations:
         verdict_impact = (
-            "Raises the completed case to High Concern."
+            "Raises the case to Suspicious Capabilities, even if other "
+            "stages didn't finish."
         )
     elif review_required:
         verdict_impact = (
@@ -1203,13 +1200,24 @@ def _render_markdown(
                 f"`{capa['capability_count']}`"
             ),
             (
-                "- Weighted risk score: "
-                f"`{risk_score}`"
+                "- Highest file score: "
+                f"`{risk_score}` (ranks files for review; never summed across files)"
             ),
             f"- Risk level: **{risk_level}**",
             f"- Verdict impact: {verdict_impact}",
         ]
     )
+
+    if combinations:
+        lines.extend(["", "### Suspicious capability combinations", ""])
+        for combo in combinations[:50]:
+            members = ", ".join(_markdown_code(name) for name in combo.get("capabilities", []))
+            lines.append(
+                f"- {_markdown_code(combo.get('relative_path', ''))}: "
+                f"{_markdown_text(combo.get('description', ''))} ({members})"
+            )
+        if len(combinations) > 50:
+            lines.append(f"- … and {len(combinations) - 50} more in report.json")
 
     if capa.get("scheduling_policy") == "smallest-first":
         lines.append(

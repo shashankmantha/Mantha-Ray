@@ -160,8 +160,14 @@ function analyzerDescription(
     }
     const matchSummary =
       `${count.toLocaleString()} capability match${count === 1 ? "" : "es"}`;
+    const combinations = Array.isArray(risk?.combinations)
+      ? risk.combinations.length
+      : 0;
+    if (combinations > 0) {
+      return `${matchSummary} · ${combinations} suspicious combination${combinations === 1 ? "" : "s"}`;
+    }
     return typeof score === "number" && level
-      ? `${matchSummary} · risk ${score.toLocaleString()} (${level})`
+      ? `${matchSummary} · highest file ${score.toLocaleString()} (${level})`
       : matchSummary;
   }
   const strings = data.extracted_string_count

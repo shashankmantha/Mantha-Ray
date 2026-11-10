@@ -347,9 +347,12 @@ function artifactAssessment(
     const level = typeof risk.level === "string"
       ? risk.level.toLowerCase()
       : "";
+    // Since capa policy 2, only a suspicious combination makes a file high
+    // risk; a high score alone just ranks it for review.
+    const policy2 = risk.policy_version === "2" || "suspicious" in risk;
     if (
-      risk.high_concern === true
-      || level.includes("high")
+      risk.suspicious === true
+      || (!policy2 && (risk.high_concern === true || level.includes("high")))
     ) {
       return {
         risk: "high",
@@ -360,6 +363,7 @@ function artifactAssessment(
       risk.review_required === true
       || level === "medium"
       || level === "review"
+      || level === "high"
     ) {
       return {
         risk: "medium",

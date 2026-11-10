@@ -110,6 +110,9 @@ export function statusKind(session: ScanSession): string {
   if (value === "unknown") {
     return "muted";
   }
+  if (value === "suspicious_capabilities") {
+    return "alert";
+  }
   if (value === "needs_review") {
     return "warning";
   }

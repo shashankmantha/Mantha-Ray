@@ -61,10 +61,15 @@ flowchart TB
 | Status | Meaning |
 | --- | --- |
 | **Known Detection** | ClamAV matched a known malware signature. |
-| **High Concern** | A YARA-X `threat` rule matched (this applies even if other stages didn't finish), or capa found a high-risk combination of capabilities. |
-| **Needs Review** | A YARA-X `suspicious` rule matched, or capa or the inventory found evidence that needs a person to look. |
+| **High Concern** | A YARA-X `threat` rule matched. This applies even if other stages didn't finish. |
+| **Suspicious Capabilities** | One file combines capabilities that together look like malware: code injection plus persistence, reading saved passwords plus network access, a keyboard hook plus network access, mining plus hiding, and so on, or uses one that legitimate software practically never needs (deleting shadow copies, a UAC bypass, patching AMSI). This also applies even if other stages didn't finish. |
+| **Needs Review** | A YARA-X `suspicious` rule matched, or capa, FLOSS or the inventory found something a person should look at. |
 | **No Indicators Detected** | Every stage finished and found nothing. This does not prove the files are safe. |
 | **Incomplete** | A stage failed, timed out or didn't reach every file. |
+
+### How capa is judged
+
+capa describes what code *can* do, not what it's for, and games do much of what malware does: they read raw keyboard input, check for debuggers, take screenshots, download updates and run JIT-compiled code. So Mantha Ray judges each file on its own, never adds capabilities up across a folder, and treats those routine capabilities as context only. A file is flagged as **Suspicious Capabilities** only for a combination in that one file (or one of a short list of rules legitimate software doesn't need). `summary.sh` lists each flagged file with the capabilities behind it, and applies the current rules to older cases too.
 
 ### Coverage
 

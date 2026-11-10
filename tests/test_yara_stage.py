@@ -346,7 +346,7 @@ class VerdictTests(unittest.TestCase):
 
         from static_triage.clamav import ClamAVStatus
         clean = SimpleNamespace(status=ClamAVStatus.CLEAN, complete=True)
-        risk = SimpleNamespace(high_concern=False, review_required=False)
+        risk = SimpleNamespace(high_concern=False, review_required=False, suspicious=False)
         self.args = (
             clean,
             SimpleNamespace(complete=True, risk=risk),

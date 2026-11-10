@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .capa_risk import RISK_POLICY_VERSION, find_combinations
 from .coverage import headline
 from .file_progress import format_duration, format_size
 
@@ -285,6 +286,44 @@ def integrity_line(data: object) -> str:
     return f"all {checked:,} re-checked after analysis, none changed" if isinstance(checked, int) else "re-checked"
 
 
+def capa_combination_lines(data: object) -> list[str]:
+    """Suspicious capa combinations, worked out again from each file's capabilities.
+
+    Re-deriving them means older cases are judged by the current policy too.
+    """
+
+    if not isinstance(data, dict):
+        return []
+    lines: list[str] = []
+    files = 0
+    for result in data.get("results") or []:
+        if not isinstance(result, dict) or not isinstance(result.get("capabilities"), list):
+            continue
+        capabilities = [
+            (item["name"], item.get("namespace"), [a for a in item.get("attack_ids") or [] if isinstance(a, str)])
+            for item in result["capabilities"]
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+            and (item.get("namespace") is None or isinstance(item.get("namespace"), str))
+        ]
+        found = find_combinations(capabilities)
+        if not found:
+            continue
+        files += 1
+        path = clean(result.get("relative_path", "?"), 80)
+        copies = len(result.get("reused_for") or [])
+        lines.append(f"  {path}" + (f"  (+{copies} identical copies)" if copies else ""))
+        for combo in found:
+            lines.append(f"    - {clean(combo.description, 120)}")
+            lines.append(f"      ({clean(', '.join(combo.capabilities), 160)})")
+    if not files:
+        return [f"capa combinations: none (policy {RISK_POLICY_VERSION})"]
+    return [
+        f"capa combinations: {files} {'file' if files == 1 else 'files'} "
+        f"(SUSPICIOUS CAPABILITIES, policy {RISK_POLICY_VERSION}):",
+        *lines,
+    ]
+
+
 def summarize(case: Path) -> str:
     report = load_report(case)
     status = clean(report.get("status", "unknown"), 40).replace("_", " ").title()
@@ -306,6 +345,7 @@ def summarize(case: Path) -> str:
         f"Hashes   {integrity_line(report.get('integrity'))}",
         "",
         *analyzer_lines("capa", analyzers.get("capa")),
+        *capa_combination_lines(analyzers.get("capa")),
         "",
         *analyzer_lines("FLOSS", analyzers.get("floss")),
     ]

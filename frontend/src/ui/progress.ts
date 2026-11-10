@@ -263,11 +263,65 @@ async function copyLiveActivity(): Promise<void> {
   }
 }
 
+const stageProgress = element<HTMLElement>("stage-progress");
+const stageProgressFill = element<HTMLElement>("stage-progress-fill");
+const stageProgressLabel = element<HTMLElement>("stage-progress-label");
+const FINISHED_FILE = new Set(["completed", "timed out", "failed", "stopped", "not reached"]);
+const YARA_PROGRESS = /YARA-X scanned ([\d,]+) of ([\d,]+) files/;
+
+/** Files finished so far in the running stage, when it reports them. */
+function currentProgress(state: ScanState): { stage: StageName; done: number; total: number } | null {
+  if (state.state !== "running") {
+    return null;
+  }
+  const stage = stageOrder.find((name) => state.stages?.[name] === "running");
+  if (!stage) {
+    return null;
+  }
+  const queue = state.queues?.[stage];
+  if (queue && queue.total > 0) {
+    const done = queue.items.filter((item) => item && FINISHED_FILE.has(item.status)).length;
+    return { stage, done, total: queue.total };
+  }
+  if (stage === "yara") {
+    for (let index = state.events.length - 1; index >= 0; index -= 1) {
+      const match = YARA_PROGRESS.exec(state.events[index].message);
+      if (match) {
+        const done = Number(match[1].replaceAll(",", ""));
+        const total = Number(match[2].replaceAll(",", ""));
+        return total > 0 ? { stage, done, total } : null;
+      }
+    }
+  }
+  return null;
+}
+
+function renderStageProgress(state: ScanState): void {
+  const progress = currentProgress(state);
+  stageProgress.classList.toggle("d-none", progress === null);
+  if (progress === null) {
+    setText(stageProgressLabel, "");
+    return;
+  }
+  const percent = Math.min(100, Math.round((progress.done / progress.total) * 100));
+  const width = `${percent}%`;
+  if (stageProgressFill.style.width !== width) {
+    stageProgressFill.style.width = width;
+  }
+  setAttribute(stageProgress, "aria-valuenow", String(percent));
+  setText(
+    stageProgressLabel,
+    `${stageLabels[progress.stage]}: ${progress.done.toLocaleString()} of `
+      + `${progress.total.toLocaleString()} files finished`,
+  );
+}
+
 export function renderProgress(state: ScanState): void {
   renderStageTracker(state);
 
   setText(progressMessage, state.message);
   setText(progressState, state.state.toUpperCase());
+  renderStageProgress(state);
 
   renderLiveActivity(state);
 }

@@ -12,8 +12,8 @@
       content="Mantha Ray local static malware triage"
     />
     <title>Mantha Ray</title>
-    <script type="module" crossorigin src="./assets/index-Civ6vdSy.js"></script>
-    <link rel="stylesheet" crossorigin href="./assets/index-Cd6ONhA4.css">
+    <script type="module" crossorigin src="./assets/index-BgdidrQO.js"></script>
+    <link rel="stylesheet" crossorigin href="./assets/index-CAJ833-9.css">
   </head>
 
   <body>
@@ -360,17 +360,20 @@
                   QUEUED
                 </span>
               </div>
+              <!-- Moves only when a file finishes: the app window (Qt's
+                   Chromium) leaks memory on constant redraws. Hidden for
+                   stages that don't report per-file progress. -->
               <div
-                class="progress"
+                id="stage-progress"
+                class="stage-progress d-none"
                 role="progressbar"
-                aria-label="Scan in progress"
+                aria-label="Files finished in this stage"
+                aria-valuemin="0"
+                aria-valuemax="100"
               >
-                <!-- Static stripes: in the app window (Qt's Chromium), a moving
-                     bar redraws every frame for hours and leaks memory. -->
-                <div
-                  class="progress-bar progress-bar-striped"
-                ></div>
+                <div id="stage-progress-fill" class="stage-progress-fill"></div>
               </div>
+              <small id="stage-progress-label" class="stage-progress-label"></small>
               <button
                 id="stop-scan"
                 class="btn btn-outline-danger"
