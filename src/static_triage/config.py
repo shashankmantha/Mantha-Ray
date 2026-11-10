@@ -30,7 +30,9 @@ class ScanLimits:
     capa_file_timeout_seconds: float = 300.0
     capa_file_timeout_max_seconds: float = 1_800.0
     capa_total_timeout_seconds: float = 3_600.0
-    capa_max_output_bytes: int = 16_000_000
+    # capa's JSON lists every match location; big libraries such as
+    # FFmpeg's produce well over 16 MB.
+    capa_max_output_bytes: int = 128_000_000
 
     # FLOSS limits
     max_floss_files: int = 50

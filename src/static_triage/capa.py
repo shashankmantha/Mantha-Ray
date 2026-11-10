@@ -448,7 +448,7 @@ def run_capa(
     *,
     executable: str = "capa",
     timeout_seconds: float = 300.0,
-    max_output_bytes: int = 16_000_000,
+    max_output_bytes: int = 128_000_000,
 ) -> CapaResult:
     """Analyze one inventory-approved binary with capa."""
 
@@ -644,7 +644,7 @@ def run_capa_batch(
     max_files: int = 250,
     file_timeout_seconds: float = 300.0,
     total_timeout_seconds: float = 3600.0,
-    max_output_bytes: int = 16_000_000,
+    max_output_bytes: int = 128_000_000,
     on_file: FileProgress | None = None,
     workers: int = 1,
     file_timeout_max_seconds: float | None = None,

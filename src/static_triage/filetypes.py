@@ -84,11 +84,51 @@ def detect_type(fd: int, size_bytes: int) -> TypeResult:
         (b"\xff\xd8\xff", "JPEG image", RoutingClass.MEDIA),
         (b"GIF87a", "GIF image", RoutingClass.MEDIA),
         (b"GIF89a", "GIF image", RoutingClass.MEDIA),
+        (b"ID3", "MP3 audio", RoutingClass.MEDIA),
+        (b"OggS", "Ogg audio/video", RoutingClass.MEDIA),
+        (b"fLaC", "FLAC audio", RoutingClass.MEDIA),
+        (b"DDS ", "DDS texture", RoutingClass.MEDIA),
     )
 
     for signature, description, route in signatures:
         if head.startswith(signature):
             return TypeResult(description, route)
+
+    if head.startswith(b"RIFF") and len(head) >= 12:
+        riff = {
+            b"WAVE": "WAV audio",
+            b"AVI ": "AVI video",
+            b"WEBP": "WebP image",
+        }.get(head[8:12])
+        if riff:
+            return TypeResult(riff, RoutingClass.MEDIA)
+
+    if head[4:8] == b"ftyp":
+        return TypeResult("MP4/QuickTime media", RoutingClass.MEDIA)
+
+    # Text with a UTF-16 byte-order mark (common for Windows .txt and .ini).
+    if head[:2] in (b"\xff\xfe", b"\xfe\xff"):
+        try:
+            head[2:4096 - (4096 % 2)].decode(
+                "utf-16-le" if head[:2] == b"\xff\xfe" else "utf-16-be"
+            )
+        except UnicodeDecodeError:
+            pass
+        else:
+            return TypeResult("UTF-16 text", RoutingClass.TEXT)
+
+    # MP3 without an ID3 tag starts straight with an MPEG audio frame:
+    # 11 sync bits, a valid version and layer, and a valid bitrate.
+    if (
+        len(head) >= 4
+        and head[0] == 0xFF
+        and head[1] & 0xE0 == 0xE0
+        and head[1] & 0x18 != 0x08
+        and head[1] & 0x06 != 0x00
+        and head[2] & 0xF0 not in (0x00, 0xF0)
+        and head[2] & 0x0C != 0x0C
+    ):
+        return TypeResult("MPEG audio (MP3)", RoutingClass.MEDIA)
 
     # Shell, Python, or other shebang-based script
     if head.startswith(b"#!"):
@@ -143,6 +183,16 @@ _ARCHIVE_EXTENSIONS = {
     ".tar",
 }
 
+# Formats that are ZIP files inside: matching is fine for them.
+_ZIP_BASED_EXTENSIONS = {
+    ".docx",
+    ".xlsx",
+    ".pptx",
+    ".jar",
+    ".apk",
+    ".pk3",
+}
+
 _DOCUMENT_EXTENSIONS = {
     ".pdf",
     ".doc",
@@ -158,6 +208,14 @@ _MEDIA_EXTENSIONS = {
     ".gif",
     ".mp3",
     ".mp4",
+    ".m4a",
+    ".mov",
+    ".ogg",
+    ".flac",
+    ".wav",
+    ".avi",
+    ".webp",
+    ".dds",
 }
 
 _TEXT_EXTENSIONS = {
@@ -191,7 +249,7 @@ def filename_evidence(
         RoutingClass.PE_EXECUTABLE: _EXECUTABLE_EXTENSIONS,
         RoutingClass.PE_DLL: _EXECUTABLE_EXTENSIONS,
         RoutingClass.SCRIPT: _SCRIPT_EXTENSIONS,
-        RoutingClass.ARCHIVE: _ARCHIVE_EXTENSIONS,
+        RoutingClass.ARCHIVE: _ARCHIVE_EXTENSIONS | _ZIP_BASED_EXTENSIONS,
         RoutingClass.DOCUMENT: _DOCUMENT_EXTENSIONS,
         RoutingClass.MEDIA: _MEDIA_EXTENSIONS,
         RoutingClass.TEXT: _TEXT_EXTENSIONS,
@@ -208,7 +266,23 @@ def filename_evidence(
         _TEXT_EXTENSIONS,
     )
 
-    if (
+    # Text files carry all kinds of extensions (.xml, .lua, .shader, ...).
+    # Flag one only when its extension claims a binary format.
+    binary_claims = (
+        _EXECUTABLE_EXTENSIONS
+        | _ARCHIVE_EXTENSIONS
+        | _ZIP_BASED_EXTENSIONS
+        | _DOCUMENT_EXTENSIONS
+        | _MEDIA_EXTENSIONS
+    )
+    if route == RoutingClass.TEXT:
+        if final_suffix in binary_claims:
+            evidence.append(
+                f"extension/type mismatch: "
+                f"{final_suffix} vs {route.value}"
+            )
+
+    elif (
         expected_extensions
         and final_suffix
         and final_suffix not in expected_extensions
