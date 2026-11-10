@@ -193,18 +193,27 @@ export function createScanController(
       return;
     }
     try {
-      // Ask only for messages newer than the ones already shown.
-      const previous = getSession(scanId)?.state.events ?? [];
+      // Ask only for messages newer than the ones already shown, and for
+      // the queues only if they changed.
+      const known = getSession(scanId)?.state;
+      const previous = known?.events ?? [];
+      const queuesVersion = known?.queues ? known.queues_version : undefined;
+      const query = typeof queuesVersion === "number"
+        ? `&queues_since=${queuesVersion}`
+        : "";
       const state = await api<ScanState>(
-        `/api/scans/${scanId}?since=${lastSeq(previous)}`,
+        `/api/scans/${scanId}?since=${lastSeq(previous)}${query}`,
       );
       state.events = mergeEvents(previous, state.events);
+      if (state.queues === null) {
+        state.queues = known?.queues ?? {};
+      }
       updateSession(state);
       if (terminalStates.has(state.state)) {
         finishScan(state);
         return;
       }
-      schedulePoll(750);
+      schedulePoll(1000);
     } catch (error) {
       setActiveScanId(null);
       ui.updateControlState();

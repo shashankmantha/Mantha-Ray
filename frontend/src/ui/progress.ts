@@ -1,5 +1,6 @@
 // Scan progress: stage tracker and the Live Activity panel.
 
+import { setAttribute, setClassName, setText } from "./dom";
 import type {
   ScanEvent,
   ScanState,
@@ -70,14 +71,13 @@ function renderStageTracker(state: ScanState): void {
     const statusElement = element<HTMLElement>(
       `stage-${stage}-status`,
     );
-    row.className =
-      `stage-step stage-state-${status}`;
-    row.setAttribute(
+    setClassName(row, `stage-step stage-state-${status}`);
+    setAttribute(
+      row,
       "aria-label",
       `${stageLabels[stage]}: ${stageStatusText(status)}`,
     );
-    statusElement.textContent =
-      stageStatusText(status);
+    setText(statusElement, stageStatusText(status));
   }
 }
 
@@ -125,8 +125,11 @@ export function activityText(
   return lines.join("\n");
 }
 
-// Only rebuild the activity text when a new message has arrived.
-let renderedActivity = "";
+// What the live activity box shows, so new messages can be appended
+// instead of redrawing the whole box.
+let renderedScanId = "";
+let renderedSeq = -1;
+const activityHeader = document.createTextNode("");
 
 function scrollActivityToBottom(): void {
   liveActivityPanel.scrollTop =
@@ -164,20 +167,63 @@ export function renderLiveActivity(
     return;
   }
 
-  const last = state.events[state.events.length - 1];
-  const key = `${state.scan_id}:${state.events.length}:${last?.seq ?? ""}:${last?.time ?? ""}`;
-  if (key === renderedActivity) {
+  if (!appendActivity(state)) {
     return;
   }
-  renderedActivity = key;
-  liveActivityPanel.textContent = activityText(
-    state.events,
-    state.event_count,
-  );
 
   if (activityAutoScroll) {
     scrollActivityToBottom();
   }
+}
+
+function hiddenNote(shown: number, total: number | undefined): string {
+  return typeof total === "number" && total > shown
+    ? `[earlier messages hidden] Showing the newest ${shown.toLocaleString()} `
+      + `of ${total.toLocaleString()} messages; the report has every file's result.\n`
+    : "";
+}
+
+/** Show new activity lines; returns whether anything changed. */
+function appendActivity(state: ScanState): boolean {
+  const events = state.events;
+  const numbered = events.length > 0
+    && events.every((event) => typeof event.seq === "number");
+  const last = events[events.length - 1];
+  if (
+    state.scan_id === renderedScanId
+    && numbered
+    && renderedSeq >= 0
+    && (last.seq as number) <= renderedSeq
+  ) {
+    return false;
+  }
+  if (state.scan_id !== renderedScanId || !numbered || renderedSeq < 0) {
+    // A different scan, or saved history without numbers: draw it once.
+    renderedScanId = state.scan_id;
+    renderedSeq = numbered ? (last.seq as number) : -1;
+    if (events.length === 0) {
+      liveActivityPanel.textContent = activityText(events);
+      return true;
+    }
+    activityHeader.textContent = hiddenNote(events.length, state.event_count);
+    liveActivityPanel.replaceChildren(
+      activityHeader,
+      ...events.map((event) => document.createTextNode(`${activityEventLine(event)}\n`)),
+    );
+    return true;
+  }
+  for (const event of events) {
+    if ((event.seq as number) > renderedSeq) {
+      liveActivityPanel.append(document.createTextNode(`${activityEventLine(event)}\n`));
+    }
+  }
+  renderedSeq = last.seq as number;
+  // Keep the box to the same number of lines the app keeps.
+  while (liveActivityPanel.childNodes.length - 1 > events.length) {
+    liveActivityPanel.childNodes[1].remove();
+  }
+  setText(activityHeader, hiddenNote(events.length, state.event_count));
+  return true;
 }
 
 function setView(queue: boolean): void {
@@ -220,9 +266,8 @@ async function copyLiveActivity(): Promise<void> {
 export function renderProgress(state: ScanState): void {
   renderStageTracker(state);
 
-  progressMessage.textContent = state.message;
-  progressState.textContent =
-    state.state.toUpperCase();
+  setText(progressMessage, state.message);
+  setText(progressState, state.state.toUpperCase());
 
   renderLiveActivity(state);
 }

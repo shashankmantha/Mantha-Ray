@@ -372,10 +372,11 @@ class ScanService:
         self,
         scan_id: str,
         since: int | None = None,
+        queues_since: int | None = None,
     ) -> dict[str, Any]:
         """Return a detached representation of a scan."""
 
-        return self._runtime.get(scan_id, since)
+        return self._runtime.get(scan_id, since, queues_since)
 
     def stop(
         self,

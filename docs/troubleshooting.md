@@ -66,6 +66,19 @@ Choose two separate locations, for example `~/samples/suspicious-folder` and `~/
 - **The Queue view** shows which file is running and which are waiting.
 - **To stop and keep what's finished,** use **Stop scan…** (or `./scripts/stop-scan.sh`); a report is still saved.
 
+## The app window closed during a scan ("std::bad_alloc")
+
+The scan keeps running in its container even if the window closes, and still writes its report:
+
+```bash
+docker ps                                # the scan is still running if a static-triage container is listed
+./scripts/summary.sh                     # once it's gone from docker ps
+```
+
+The next scan picks up that case's capa and FLOSS results automatically.
+
+On a machine or VM with little memory, leave about 1.5 GB free beyond the profile's memory: the window, the desktop and Docker itself need it. If the profile's memory is more than about three quarters of what Docker reports, choose **Custom** and lower **Memory**. Each parallel analysis needs about 1 GB, and big programs can need 4–5 GB on their own.
+
 ## A clean file shows low risk
 
 A capa capability such as "terminate process" is informational. Low risk means a weak behaviour was seen, not that the file is malicious.

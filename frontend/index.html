@@ -363,8 +363,10 @@
                 role="progressbar"
                 aria-label="Scan in progress"
               >
+                <!-- Static stripes: in the app window (Qt's Chromium), a moving
+                     bar redraws every frame for hours and leaks memory. -->
                 <div
-                  class="progress-bar progress-bar-striped progress-bar-animated"
+                  class="progress-bar progress-bar-striped"
                 ></div>
               </div>
               <button

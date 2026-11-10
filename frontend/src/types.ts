@@ -118,7 +118,9 @@ export interface ScanState {
   events: ScanEvent[];
   // Messages ever logged; the server keeps only the newest ones.
   event_count?: number;
-  queues?: Record<string, StageQueue>;
+  // null when unchanged since the version the app asked about.
+  queues?: Record<string, StageQueue> | null;
+  queues_version?: number;
   stages?: Partial<Record<StageName, StageStatus>>;
   result: ScanResult | null;
   error: string | null;

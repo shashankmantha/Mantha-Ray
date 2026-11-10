@@ -122,6 +122,8 @@ class WebScanState:
     queues: dict[str, dict[str, Any]] = field(
         default_factory=dict
     )
+    # Bumped whenever a queue changes, so the app can skip resending them.
+    queues_version: int = 0
     stages: dict[str, str] = field(
         default_factory=waiting_stages
     )
@@ -139,10 +141,24 @@ class WebScanState:
         if len(self.events) > MAX_EVENTS:
             del self.events[: len(self.events) - MAX_EVENTS]
 
-    def to_dict(self, since: int | None = None) -> dict[str, Any]:
-        """The scan's state; with since, only the events after that number."""
+    def to_dict(
+        self,
+        since: int | None = None,
+        queues_since: int | None = None,
+    ) -> dict[str, Any]:
+        """The scan's state; with since, only the events after that number;
+        with queues_since, queues only if they changed after that version."""
 
-        data = asdict(self)
+        unchanged = queues_since is not None and queues_since == self.queues_version
+        if unchanged:
+            self.queues, saved = {}, self.queues
+            try:
+                data = asdict(self)
+            finally:
+                self.queues = saved
+            data["queues"] = None
+        else:
+            data = asdict(self)
         if since is not None:
             data["events"] = [
                 event for event in data["events"] if event["seq"] > since

@@ -112,6 +112,7 @@ class ScanRuntime:
         self,
         scan_id: str,
         since: int | None = None,
+        queues_since: int | None = None,
     ) -> dict[str, Any]:
         """Return a detached representation of a scan."""
 
@@ -123,7 +124,7 @@ class ScanRuntime:
                     "The requested scan does not exist."
                 )
 
-            return state.to_dict(since)
+            return state.to_dict(since, queues_since)
 
     def cancel(
         self,
@@ -358,6 +359,7 @@ class ScanRuntime:
             if queue is None or queue["total"] != total or offset == 0:
                 queue = {"total": total, "items": [None] * total}
                 state.queues[stage] = queue
+            state.queues_version += 1
             for item in items:
                 index = int(item["position"]) - 1
                 if 0 <= index < total:
@@ -424,7 +426,9 @@ class ScanRuntime:
                 return
 
             state.stages[stage] = status
-            self._track_file(state, stage, status, message)
+            if stage in state.queues:
+                self._track_file(state, stage, status, message)
+                state.queues_version += 1
             state.message = message
             state.updated_at = now()
             state.add_event(state.updated_at, message)

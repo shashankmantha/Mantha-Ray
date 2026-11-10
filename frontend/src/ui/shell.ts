@@ -134,9 +134,23 @@ function formatSessionTime(date: Date): string {
   });
 }
 
+// The list as last drawn; it's rebuilt only when this changes.
+let renderedSessionList = "";
+
 export function renderSessionList(): void {
-  scanList.replaceChildren();
   const sessionOrder = orderedSessionIds();
+  const signature = JSON.stringify(sessionOrder.map((id) => {
+    const session = getSession(id);
+    return session
+      ? [id, session.label, statusKind(session), statusText(session),
+        session.startedAt, getSelectedScanId() === id]
+      : [id];
+  }));
+  if (signature === renderedSessionList) {
+    return;
+  }
+  renderedSessionList = signature;
+  scanList.replaceChildren();
   scanCount.textContent = String(sessionOrder.length);
   scanListEmpty.classList.toggle(
     "d-none",

@@ -1,5 +1,6 @@
 
 
+import { setClassName, setText } from "./dom";
 import { isTerminalState } from "../scanController";
 import { analyzer, objectValue } from "../risk";
 import {
@@ -33,20 +34,19 @@ export function renderSelectedSession(): void {
   if (!session) {
     return;
   }
-  element("scan-title").textContent = session.label;
+  // Runs on every status update during a scan: only write what changed.
+  setText(element("scan-title"), session.label);
   const result = session.state.result;
-  element("case-id").textContent = result?.case_id
-    ?? session.state.scan_id;
+  setText(element("case-id"), result?.case_id ?? session.state.scan_id);
   const resources = describeResources(
     result?.report?.resources ?? session.state.resource_profile,
   );
   const resourceLine = element("scan-resources");
-  resourceLine.textContent = resources ?? "";
+  setText(resourceLine, resources ?? "");
   resourceLine.classList.toggle("d-none", resources === null);
   const verdict = element("verdict-badge");
-  verdict.textContent = statusText(session).toUpperCase();
-  verdict.className =
-    `verdict verdict-${statusKind(session)}`;
+  setText(verdict, statusText(session).toUpperCase());
+  setClassName(verdict, `verdict verdict-${statusKind(session)}`);
   const terminal = isTerminalState(session.state.state);
   progressWrap.classList.toggle("d-none", terminal);
   stopButton.classList.toggle(
@@ -56,15 +56,17 @@ export function renderSelectedSession(): void {
   const winding = session.state.state === "stopping"
     || session.state.state === "cancelling";
   stopButton.disabled = winding;
-  stopButton.textContent = session.state.state === "stopping"
+  setText(stopButton, session.state.state === "stopping"
     ? "Stopping and saving the report\u2026"
     : session.state.state === "cancelling"
       ? "Cancelling\u2026"
-      : "Stop scan\u2026";
+      : "Stop scan\u2026");
   if (!terminal) {
-    resultsSection.classList.add("d-none");
+    // toggle(…, true) leaves the element alone when it's already hidden;
+    // add() rewrites the attribute every time.
+    resultsSection.classList.toggle("d-none", true);
     renderProgress(session.state);
-    openCaseButton.classList.add("d-none");
+    openCaseButton.classList.toggle("d-none", true);
     return;
   }
   if (session.state.state === "completed" && result) {

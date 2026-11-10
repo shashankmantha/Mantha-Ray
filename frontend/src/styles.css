@@ -1116,10 +1116,12 @@ h2 {
   background: #18214a;
 }
 
+/* A static ring instead of a pulse: the app window's Chromium never frees
+   the drawing memory of an animation that runs for hours. */
 .stage-state-running .stage-marker {
   border-color: #9b87ff;
   background: #7457e8;
-  animation: stage-pulse 1s steps(2, end) infinite;
+  box-shadow: 0 0 0 3px rgba(155, 135, 255, 0.35);
 }
 
 .stage-state-running .stage-copy small {
@@ -1164,16 +1166,6 @@ h2 {
   color: #ff8798;
 }
 
-@keyframes stage-pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-
-  50% {
-    opacity: 0.35;
-  }
-}
 
 @media (max-width: 899.98px) {
   .stage-tracker {

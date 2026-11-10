@@ -69,7 +69,24 @@ function itemLine(item: QueueItem): HTMLDivElement {
 }
 
 /** Rebuild the queue panel; returns the first running line, if any. */
+// The queues as last drawn in each panel, and the running line in them.
+const rendered = new WeakMap<HTMLElement, { key: string; current: HTMLElement | null }>();
+
 export function renderQueue(
+  panel: HTMLElement,
+  state: ScanState,
+): HTMLElement | null {
+  const key = JSON.stringify(state.queues ?? null);
+  const previous = rendered.get(panel);
+  if (previous?.key === key && panel.childNodes.length > 0) {
+    return previous.current;
+  }
+  const current = drawQueue(panel, state);
+  rendered.set(panel, { key, current });
+  return current;
+}
+
+function drawQueue(
   panel: HTMLElement,
   state: ScanState,
 ): HTMLElement | null {

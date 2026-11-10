@@ -410,9 +410,10 @@ def create_app(
             Depends(require_session),
         ],
         since: Annotated[int | None, Query(ge=0)] = None,
+        queues_since: Annotated[int | None, Query(ge=0)] = None,
     ) -> dict[str, object]:
         try:
-            return service.get(scan_id, since)
+            return service.get(scan_id, since, queues_since)
 
         except HostScanError as exc:
             raise HTTPException(
