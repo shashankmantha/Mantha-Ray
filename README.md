@@ -69,7 +69,7 @@ flowchart TB
 
 ### How capa is judged
 
-capa describes what code *can* do, not what it's for, and games do much of what malware does: they read raw keyboard input, check for debuggers, take screenshots, download updates and run JIT-compiled code. So Mantha Ray judges each file on its own, never adds capabilities up across a folder, and treats those routine capabilities as context only. A file is flagged as **Suspicious Capabilities** only for a combination in that one file (or one of a short list of rules legitimate software doesn't need). `summary.sh` lists each flagged file with the capabilities behind it, and applies the current rules to older cases too.
+capa describes what code *can* do, not what it's for, and games do much of what malware does: they read raw keyboard input, check for debuggers, take screenshots, record from the microphone for voice chat, read the CPU name from the registry, download updates and run JIT-compiled code. A few capa rules are also broader than their names suggest (for example "schedule task via at" matches any program containing the letters "at" and a time-like string). So Mantha Ray judges each file on its own, never adds capabilities up across a folder, and treats those routine capabilities as context only. A file is flagged as **Suspicious Capabilities** only for a combination in that one file (or one of a short list of rules legitimate software doesn't need). `summary.sh` lists each flagged file with the capabilities behind it, and applies the current rules to older cases too.
 
 ### Coverage
 

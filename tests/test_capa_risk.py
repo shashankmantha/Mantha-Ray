@@ -84,11 +84,33 @@ class CombinationTests(unittest.TestCase):
                          ("gather chrome based browser login information", "send HTTP request"))
 
     def test_a_game_with_one_bad_addition(self) -> None:
-        # The game's anti-VM check now pairs with the hook as well.
-        self.assertEqual(ids(find_combinations(GAME + [KEYLOGGER[0]])),
-                         ["spying-and-network", "evasion-with-payload"])
+        self.assertEqual(ids(find_combinations(GAME + [KEYLOGGER[0]])), ["spying-and-network"])
         # A JIT's RWX memory plus a Run key is not "injection with persistence".
         self.assertEqual(find_combinations([GAME[5], INJECTOR[1]]), ())
+
+    def test_door_kickers_2_false_alarms(self) -> None:
+        # What policy 2 flagged in two Door Kickers 2 files (2026-11-10).
+        openal = [
+            ("hijack thread execution", "host-interaction/process/inject", ["T1055.003"]),
+            ("capture microphone audio", "collection/microphone", ["T1123"]),
+        ]
+        game_exe = [
+            ("schedule task via at", "persistence/scheduled-tasks", ["T1053.002"]),
+            ("reference anti-VM strings", "anti-analysis/anti-vm/vm-detection", ["T1497.001"]),
+            ("reference anti-VM strings targeting Parallels", "anti-analysis/anti-vm/vm-detection",
+             ["T1497.001"]),
+        ]
+        self.assertEqual(find_combinations(openal), ())
+        self.assertEqual(find_combinations(game_exe), ())
+        # Real versions of the same ideas still count.
+        self.assertEqual(ids(find_combinations([
+            ("inject dll", "host-interaction/process/inject", ["T1055.001"]),
+            ("capture webcam image", "collection/webcam", ["T1125"]),
+        ])), ["injection-with-payload"])
+        self.assertEqual(ids(find_combinations([
+            ("schedule task via schtasks", "persistence/scheduled-tasks", ["T1053.005"]),
+            ("patch Antimalware Scan Interface function", "anti-analysis/anti-av", ["T1562.001"]),
+        ])), ["strong-indicator", "persistence-with-payload"])
 
     def test_routine_rules_have_no_groups(self) -> None:
         for name, namespace, attack in GAME[1:7]:
@@ -153,7 +175,7 @@ class SummaryTests(unittest.TestCase):
         self.assertIn("log keystrokes via application hook, send data on socket", text)
         self.assertNotIn("game.exe", text)
         self.assertEqual(capa_combination_lines({"results": [data["results"][0]]}),
-                         ["capa combinations: none (policy 2)"])
+                         ["capa combinations: none (policy 3)"])
 
 
 if __name__ == "__main__":

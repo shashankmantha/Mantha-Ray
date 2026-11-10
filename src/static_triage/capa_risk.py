@@ -7,7 +7,7 @@ from enum import StrEnum
 from typing import Iterable
 
 
-RISK_POLICY_VERSION = "2"
+RISK_POLICY_VERSION = "3"
 REVIEW_SCORE = 6
 HIGH_CONCERN_SCORE = 10
 MAX_TOTAL_SCORE = 100
@@ -39,7 +39,25 @@ ROUTINE_RULES = frozenset({
     "reference processor manufacturer constants",
     "reference startup folder",
     "get startup folder",
+    # Policy 3, from real games (Door Kickers 2, 2026-11-10):
+    # Matches any program that starts a process and contains the letters "at"
+    # and a "1:2"-like string (unanchored regex), e.g. "format" and "%d:%d".
+    "schedule task via at",
+    # Suspend, read/set thread state, resume: crash handlers, profilers and
+    # audio threads do this in their own process. Real cross-process
+    # injection is covered by the other inject rules.
+    "hijack thread execution",
 })
+
+# Rule-name prefixes treated the same way. String-only anti-VM rules match the
+# CPU-name registry key games read for system info, and the GPU names (VMware
+# SVGA, Parallels Display Adapter) found in graphics driver lists.
+ROUTINE_RULE_PREFIXES = ("reference anti-vm strings",)
+
+
+def is_routine(name: str) -> bool:
+    normalized = name.casefold().strip()
+    return normalized in ROUTINE_RULES or normalized.startswith(ROUTINE_RULE_PREFIXES)
 
 # Rules legitimate software essentially never needs: each alone is enough.
 STRONG_SINGLE_RULES = frozenset({
@@ -63,11 +81,12 @@ STRONG_SINGLE_RULES = frozenset({
 _GROUP_NAMESPACES = {
     "injection": ("host-interaction/process/inject", "load-code/shellcode"),
     "credentials": ("collection/browser", "collection/password-manager"),
+    # Microphone capture isn't here: audio libraries (OpenAL) and voice chat
+    # use it routinely.
     "spying": (
         "collection/keylog",
         "host-interaction/clipboard",
         "collection/webcam",
-        "collection/microphone",
     ),
     "persistence": ("persistence/",),
     "remote-shell": ("communication/c2/shell",),
@@ -152,7 +171,7 @@ def capability_groups(
 ) -> frozenset[str]:
     """The groups one capa rule belongs to; routine rules belong to none."""
 
-    if name.casefold().strip() in ROUTINE_RULES:
+    if is_routine(name):
         return frozenset()
     space = (namespace or "").casefold().strip()
     groups = {
@@ -439,7 +458,7 @@ def assess_capability(
     normalized_namespace = (namespace or "").casefold().strip()
     identity = (normalized_name, normalized_namespace)
 
-    if normalized_name in ROUTINE_RULES:
+    if is_routine(normalized_name):
         base_score = 1
         policy = "routine-in-legitimate-software"
         reason = (
