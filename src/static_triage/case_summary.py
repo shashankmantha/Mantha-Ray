@@ -152,10 +152,12 @@ def analyzer_lines(name: str, data: object) -> list[str]:
     plain = sum(1 for r in results if r.get("mode") == "plain")
     unique = data.get("unique_eligible_files", data.get("eligible_files", 0))
     cached = sum(1 for r in results if r.get("cached_from"))
+    escalated = data.get("escalated_files") or 0
     counts = [
         f"{unique} unique",
         f"{len(results) - cached} analyzed",
         *([f"{cached} reused from cache"] if cached else []),
+        *([f"{escalated} given more time"] if escalated else []),
         f"{completed - cached} completed",
         f"{timed_out} timed out",
     ]

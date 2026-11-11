@@ -26,6 +26,13 @@ def sha(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()
 
 
+def timed_out_result(path: str, limit: float = 960.0, **changes) -> CapaResult:
+    return replace(
+        capa_result(path, complete=False),
+        timeout_seconds=limit, duration_seconds=limit, **changes,
+    )
+
+
 def capa_result(path: str, complete: bool = True, **changes) -> CapaResult:
     result = CapaResult(
         status=CapaStatus.COMPLETED if complete else CapaStatus.TIMED_OUT,
@@ -190,6 +197,80 @@ class CacheTests(unittest.TestCase):
         self.assertEqual(result_cache.clear(self.cache), 1)
         self.assertEqual(result_cache.ingest_results_directory(self.results, self.cache), 0)
         self.assertEqual(result_cache.status(self.cache)["entries"], {"capa": 0, "floss": 0})
+
+
+class TimeoutEscalationTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self._temporary = tempfile.TemporaryDirectory()
+        self.root = Path(self._temporary.name)
+        self.cache = self.root / "cache"
+        self.results = self.root / "results"
+        self.files = {"bin/steamclient.dll": sha("sc"), "bin/ok.dll": sha("ok")}
+
+    def tearDown(self) -> None:
+        self._temporary.cleanup()
+
+    def test_timeouts_are_remembered_and_escalate(self) -> None:
+        write_case(self.results, self.files,
+                   [timed_out_result("bin/steamclient.dll"), capa_result("bin/ok.dll")], [])
+        result_cache.ingest_case(self.results / CASE, self.cache)
+        hints = result_cache.load_more_time(self.cache, "capa", self.files.values())
+        self.assertEqual(hints, {sha("sc"): 1})
+        # The same case never counts twice; a second case does.
+        result_cache.ingest_case(self.results / CASE, self.cache)
+        write_case(self.results, self.files, [timed_out_result("bin/steamclient.dll")], [],
+                   case_id="case-20261111T010000Z-00000002")
+        result_cache.ingest_case(self.results / "case-20261111T010000Z-00000002", self.cache)
+        hints = result_cache.load_more_time(self.cache, "capa", self.files.values())
+        self.assertEqual(hints, {sha("sc"): 2})
+        self.assertEqual(result_cache.load_more_time(self.cache, "floss", self.files.values()), {})
+
+    def test_budget_stops_and_user_stops_do_not_escalate(self) -> None:
+        write_case(self.results, self.files, [
+            timed_out_result("bin/steamclient.dll", stopped_at_budget_end=True),
+            timed_out_result("bin/ok.dll", stopped_by_user=True),
+        ], [])
+        result_cache.ingest_case(self.results / CASE, self.cache)
+        self.assertEqual(result_cache.load_more_time(self.cache, "capa", self.files.values()), {})
+
+    def test_escalated_timeout_doubles_then_caps(self) -> None:
+        self.assertEqual(result_cache.escalated_timeout(600, 0), 600)
+        self.assertEqual(result_cache.escalated_timeout(600, 1), 1200)
+        self.assertEqual(result_cache.escalated_timeout(600, 2), 2400)
+        self.assertEqual(result_cache.escalated_timeout(600, 9), 2400)
+        self.assertEqual(result_cache.escalated_timeout(5000, 1), 7200)
+
+    def test_completion_after_escalation_is_cached_and_clear_resets(self) -> None:
+        write_case(self.results, self.files, [timed_out_result("bin/steamclient.dll")], [])
+        result_cache.ingest_case(self.results / CASE, self.cache)
+        write_case(self.results, self.files, [capa_result("bin/steamclient.dll")], [],
+                   case_id="case-20261111T020000Z-00000003")
+        result_cache.ingest_case(self.results / "case-20261111T020000Z-00000003", self.cache)
+        self.assertEqual(
+            list(result_cache.load_capa(self.cache, [sha("sc")], tool_version=CAPA_VERSION)),
+            [sha("sc")],
+        )
+        result_cache.clear(self.cache)
+        self.assertEqual(result_cache.load_more_time(self.cache, "capa", self.files.values()), {})
+
+    def test_batch_uses_the_larger_limit(self) -> None:
+        entries = [entry("bin/steamclient.dll", sha("sc"), size=4 * 1024**2)]
+        captured = {}
+
+        def fake_run_groups(groups, analyze, *, timeout_for, **kwargs):
+            captured["timeout"] = timeout_for(groups[0])
+            raise SystemExit  # stop before running anything
+
+        from unittest.mock import patch as mock_patch
+        for attempts, expected in ((0, 1200.0), (1, 2400.0)):
+            with mock_patch("static_triage.capa.run_groups", side_effect=fake_run_groups):
+                with self.assertRaises(SystemExit):
+                    run_capa_batch(
+                        entries, Path("/nonexistent"), executable="/nonexistent/capa",
+                        file_timeout_seconds=300.0, file_timeout_max_seconds=3600.0,
+                        more_time={sha("sc"): attempts} if attempts else None,
+                    )
+            self.assertEqual(captured["timeout"], expected)
 
 
 class BatchTests(unittest.TestCase):

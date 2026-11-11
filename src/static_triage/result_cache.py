@@ -10,6 +10,9 @@ from typing import Any
 
 from .capa import CapaCapability, CapaResult, CapaStatus
 from .floss import EMULATION, FlossResult, FlossStatus, FlossString
+from .parallel import MAX_TIMEOUT_ATTEMPTS, escalated_timeout
+
+__all__ = ["escalated_timeout"]
 
 # Results of slow analyzers (capa, FLOSS), saved by the file's SHA-256 so a
 # later scan of an identical file can reuse them. The host builds the cache
@@ -28,6 +31,8 @@ MAX_CASES_PER_INGEST = 50
 MAX_CAPABILITIES = 5_000
 MAX_STRINGS = 100_000
 MAX_TEXT = 65_536
+
+MAX_TIMEOUT_CASES = 10
 
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 CASE_ID_PATTERN = re.compile(r"^case-\d{8}T\d{6}Z-[0-9a-f]{8}$")
@@ -49,6 +54,61 @@ def entry_path(root: Path, analyzer: str, sha256: str) -> Path:
     if analyzer not in ANALYZERS or not SHA256_PATTERN.fullmatch(sha256):
         raise CacheError("invalid cache key")
     return root / analyzer / sha256[:2] / f"{sha256}.json"
+
+
+def timeout_path(root: Path, analyzer: str, sha256: str) -> Path:
+    if analyzer not in ANALYZERS or not SHA256_PATTERN.fullmatch(sha256):
+        raise CacheError("invalid cache key")
+    return root / "timeouts" / analyzer / sha256[:2] / f"{sha256}.json"
+
+
+def load_more_time(root: Path | None, analyzer: str, hashes: Iterable[str]) -> dict[str, int]:
+    """Earlier per-file timeouts for these hashes, as {sha256: attempts}."""
+
+    found: dict[str, int] = {}
+    if root is None or not (root / "timeouts").is_dir():
+        return found
+    for sha256 in set(hashes):
+        try:
+            data = _read_json(timeout_path(root, analyzer, sha256), 65_536)
+        except (OSError, ValueError, UnicodeDecodeError):
+            continue
+        attempts = data.get("attempts") if isinstance(data, dict) else None
+        if isinstance(attempts, int) and not isinstance(attempts, bool) and attempts > 0:
+            found[sha256] = min(attempts, MAX_TIMEOUT_ATTEMPTS)
+    return found
+
+
+def _record_timeout(root: Path, analyzer: str, sha256: str, case_id: str,
+                    timeout_seconds: Any) -> None:
+    path = timeout_path(root, analyzer, sha256)
+    data: dict[str, Any] = {"attempts": 0, "cases": []}
+    try:
+        existing = _read_json(path, 65_536)
+        if (
+            isinstance(existing, dict)
+            and isinstance(existing.get("attempts"), int)
+            and isinstance(existing.get("cases"), list)
+        ):
+            data = existing
+    except (OSError, ValueError, UnicodeDecodeError):
+        pass
+    if case_id in data["cases"]:
+        return
+    data["attempts"] = int(data["attempts"]) + 1
+    data["cases"] = ([case_id] + [c for c in data["cases"] if isinstance(c, str)])[:MAX_TIMEOUT_CASES]
+    if isinstance(timeout_seconds, (int, float)) and not isinstance(timeout_seconds, bool):
+        data["last_limit_seconds"] = float(timeout_seconds)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(data, sort_keys=True).encode("utf-8")
+    handle = tempfile.NamedTemporaryFile(dir=path.parent, prefix=".tmp-", delete=False)
+    try:
+        with handle:
+            handle.write(payload)
+        os.replace(handle.name, path)
+    except OSError:
+        Path(handle.name).unlink(missing_ok=True)
+        raise
 
 
 # --- validation shared by both sides -----------------------------------------
@@ -353,24 +413,33 @@ def _entries_from_case(case_dir: Path) -> list[dict[str, Any]]:
     limits = manifest.get("limits") if isinstance(manifest.get("limits"), dict) else {}
     analyzers = report.get("analyzers") if isinstance(report.get("analyzers"), dict) else {}
     entries: list[dict[str, Any]] = []
+    timeouts: list[tuple[str, str, Any]] = []
     for analyzer, tool in (("capa", "capa"), ("floss", "floss")):
         version = versions.get(tool)
         batch = analyzers.get(analyzer)
         if not version or not isinstance(batch, dict):
             continue
         for result in batch.get("results") or []:
-            if (
-                not isinstance(result, dict)
-                or result.get("complete") is not True
-                or result.get("status") != "completed"
-                or result.get("cached_from")
-                or (analyzer == "floss" and result.get("mode") != EMULATION)
-            ):
+            if not isinstance(result, dict) or result.get("cached_from"):
                 continue
             path = result.get("relative_path")
             # Only files this case actually inventoried, under their own hash.
             sha256 = hashes.get(path) if isinstance(path, str) else None
             if sha256 is None:
+                continue
+            if (
+                result.get("timed_out") is True
+                and not result.get("stopped_at_budget_end")
+                and not result.get("stopped_by_user")
+            ):
+                # A real per-file timeout: give it more time next scan.
+                timeouts.append((analyzer, sha256, result.get("timeout_seconds")))
+                continue
+            if (
+                result.get("complete") is not True
+                or result.get("status") != "completed"
+                or (analyzer == "floss" and result.get("mode") != EMULATION)
+            ):
                 continue
             raw = {
                 "schema": CACHE_SCHEMA,
@@ -398,7 +467,7 @@ def _entries_from_case(case_dir: Path) -> list[dict[str, Any]]:
                 entries.append(_clean_entry(raw, analyzer, sha256))
             except CacheError:
                 continue
-    return entries
+    return entries, timeouts
 
 
 def ingest_case(case_dir: Path, root: Path | None = None) -> int:
@@ -410,7 +479,13 @@ def ingest_case(case_dir: Path, root: Path | None = None) -> int:
     marker = root / "ingested" / case_dir.name
     if marker.exists():
         return 0
-    added = sum(_write_entry(root, entry) for entry in _entries_from_case(case_dir))
+    entries, timeouts = _entries_from_case(case_dir)
+    added = sum(_write_entry(root, entry) for entry in entries)
+    for analyzer, sha256, limit in timeouts:
+        try:
+            _record_timeout(root, analyzer, sha256, case_dir.name, limit)
+        except (OSError, CacheError):
+            continue
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()
     return added
@@ -469,6 +544,8 @@ def clear(root: Path | None = None) -> int:
         for path in (root / analyzer).glob("??/*.json"):
             path.unlink(missing_ok=True)
             removed += 1
+        for path in (root / "timeouts" / analyzer).glob("??/*.json"):
+            path.unlink(missing_ok=True)
     # The "ingested" markers stay, so the cases already read aren't read
     # again: clearing really does mean those files get analyzed afresh.
     return removed

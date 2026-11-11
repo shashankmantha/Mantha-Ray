@@ -24,6 +24,7 @@ from .file_progress import FileProgress, QueueCallback
 from . import stop_request
 from .memory_budget import estimate_mib, memory_policy
 from .parallel import (
+    escalated_timeout,
     looks_memory_killed,
     run_groups,
     scaled_timeout,
@@ -192,6 +193,8 @@ class CapaBatchResult:
     memory_policy: dict[str, Any] | None = None
     # Unique files whose result came from the cache instead of a new run.
     cached_files: int = 0
+    # Unique files given a larger per-file limit after earlier timeouts.
+    escalated_files: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -209,6 +212,7 @@ class CapaBatchResult:
             ),
             "attempted_files": self.attempted_files,
             "cached_files": self.cached_files,
+            "escalated_files": self.escalated_files,
             "duplicate_analyses_avoided": (
                 self.duplicate_analyses_avoided
             ),
@@ -655,6 +659,7 @@ def run_capa_batch(
     memory_budget_mib: int | None = None,
     on_queue: QueueCallback | None = None,
     cached: Mapping[str, CapaResult] | None = None,
+    more_time: Mapping[str, int] | None = None,
 ) -> CapaBatchResult:
     """Run capa over a bounded set of eligible binaries."""
 
@@ -725,10 +730,13 @@ def run_capa_batch(
         label="capa",
         workers=workers,
         total_timeout_seconds=total_timeout_seconds,
-        timeout_for=lambda group: scaled_timeout(
-            group.representative.size_bytes,
-            base_seconds=file_timeout_seconds,
-            max_seconds=max_timeout,
+        timeout_for=lambda group: escalated_timeout(
+            scaled_timeout(
+                group.representative.size_bytes,
+                base_seconds=file_timeout_seconds,
+                max_seconds=max_timeout,
+            ),
+            (more_time or {}).get(group.representative.sha256 or "", 0),
         ),
         outcome=lambda result: (
             result.complete,
@@ -863,6 +871,10 @@ def run_capa_batch(
         eligible_files=selection.eligible_count,
         attempted_files=len(run.finished),
         cached_files=len(selection.cached_groups),
+        escalated_files=sum(
+            1 for group in selection.groups
+            if (more_time or {}).get(group.representative.sha256 or "", 0) > 0
+        ),
         skipped_due_to_limit=(
             selection.skipped_due_to_limit
         ),

@@ -22,6 +22,20 @@ R = TypeVar("R")
 # proportionally more time, up to the large-file cap.
 TIMEOUT_REFERENCE_BYTES = 1024**2
 
+# A file that hit its per-file time limit gets more time on the next scan:
+# double per earlier attempt, up to 4x, never past an absolute ceiling.
+MAX_TIMEOUT_ATTEMPTS = 2
+ESCALATED_CEILING_SECONDS = 2 * 60 * 60
+
+
+def escalated_timeout(base_seconds: float, attempts: int) -> float:
+    """The per-file limit for a file that timed out in earlier scans."""
+
+    if attempts <= 0:
+        return base_seconds
+    factor = 2 ** min(attempts, MAX_TIMEOUT_ATTEMPTS)
+    return min(max(base_seconds, base_seconds * factor), ESCALATED_CEILING_SECONDS)
+
 
 def scaled_timeout(
     size_bytes: object,

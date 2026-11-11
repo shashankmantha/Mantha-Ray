@@ -162,6 +162,7 @@ capa and FLOSS are the slow stages, so their complete results are saved by each 
 - **A changed file is always analyzed again.** One changed byte gives a different hash, so it can't match an old result.
 - **Only finished work is saved.** Timeouts, failures and plain-strings-only passes never are, so those files get another try. ClamAV and YARA-X always run fresh.
 - **A new capa or FLOSS version** (or different FLOSS string limits) means fresh analysis.
+- **A file that hit its per-file time limit gets more time next scan:** double per earlier attempt, up to 4x (never more than 2 hours). With everything else answered from saved results, a rerun's whole budget goes to exactly those files, so repeated scans converge on full coverage instead of repeating the same timeouts.
 - **After every scan,** each file is hashed again and compared with the inventory. A file that changed while it was being scanned makes the case Incomplete and is listed by name.
 
 ```bash

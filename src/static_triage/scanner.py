@@ -354,11 +354,25 @@ def run_inventory_scan(
             "running",
             "capa is analyzing eligible binaries...",
         )
+        capa_hashes = _hashes(entries, _CAPA_ROUTING_CLASSES)
         cached_capa = result_cache.load_capa(
             cache_root,
-            _hashes(entries, _CAPA_ROUTING_CLASSES),
+            capa_hashes,
             tool_version=capa_tool.version,
         )
+        capa_more_time = result_cache.load_more_time(
+            cache_root, "capa", capa_hashes,
+        )
+        if capa_more_time:
+            count = len(capa_more_time)
+            _emit_progress(
+                on_progress,
+                "capa",
+                "running",
+                f"capa: giving {count} "
+                + ("file" if count == 1 else "files")
+                + " more time after timeouts in earlier scans.",
+            )
         if cached_capa:
             _emit_progress(
                 on_progress,
@@ -409,6 +423,7 @@ def run_inventory_scan(
                     else None
                 ),
                 cached=cached_capa,
+                more_time=capa_more_time,
             )
         except (OSError, ValueError) as exc:
             warnings.append(
@@ -461,13 +476,27 @@ def run_inventory_scan(
             "running",
             "FLOSS is extracting eligible strings...",
         )
+        floss_hashes = _hashes(entries, _FLOSS_ROUTING_CLASSES)
         cached_floss = result_cache.load_floss(
             cache_root,
-            _hashes(entries, _FLOSS_ROUTING_CLASSES),
+            floss_hashes,
             tool_version=floss_tool.version,
             max_strings=config.limits.floss_max_strings,
             max_string_chars=config.limits.floss_max_string_chars,
         )
+        floss_more_time = result_cache.load_more_time(
+            cache_root, "floss", floss_hashes,
+        )
+        if floss_more_time:
+            count = len(floss_more_time)
+            _emit_progress(
+                on_progress,
+                "floss",
+                "running",
+                f"FLOSS: giving {count} "
+                + ("file" if count == 1 else "files")
+                + " more time after timeouts in earlier scans.",
+            )
         if cached_floss:
             _emit_progress(
                 on_progress,
@@ -525,6 +554,7 @@ def run_inventory_scan(
                     else None
                 ),
                 cached=cached_floss,
+                more_time=floss_more_time,
             )
         except (OSError, ValueError) as exc:
             warnings.append(
