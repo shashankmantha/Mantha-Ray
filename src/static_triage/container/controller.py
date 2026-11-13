@@ -56,18 +56,31 @@ def _prepare_cache(
     try:
         home = result_cache.cache_home()
         home.mkdir(parents=True, exist_ok=True)
-        added = result_cache.ingest_results_directory(
+        counts = result_cache.ingest_results_directory(
             results_directory.expanduser(), home,
         )
     except OSError:
         return None
-    if added and on_status is not None:
-        on_status(
-            f"Saved {added} earlier capa/FLOSS "
-            + ("result" if added == 1 else "results")
-            + " for reuse on identical files."
-        )
+    if counts and on_status is not None:
+        on_status("Read earlier scans: " + _ingest_summary(counts) + ".")
     return home
+
+
+def _ingest_summary(counts: result_cache.IngestCounts) -> str:
+    parts = []
+    if counts.results:
+        parts.append(
+            f"{counts.results} capa/FLOSS "
+            + ("result" if counts.results == 1 else "results")
+            + " saved for reuse on identical files"
+        )
+    if counts.timeouts:
+        parts.append(
+            f"{counts.timeouts} "
+            + ("file" if counts.timeouts == 1 else "files")
+            + " that ran out of time noted for a larger limit"
+        )
+    return " and ".join(parts) if parts else "nothing new"
 
 
 def _remember_results(
@@ -75,15 +88,11 @@ def _remember_results(
     on_status: Callable[[str], None] | None,
 ) -> None:
     try:
-        added = result_cache.ingest_case(case_directory)
+        counts = result_cache.ingest_case(case_directory)
     except (OSError, ValueError, UnicodeDecodeError):
         return
-    if added and on_status is not None:
-        on_status(
-            f"Saved {added} capa/FLOSS "
-            + ("result" if added == 1 else "results")
-            + " so the next scan can reuse them."
-        )
+    if counts and on_status is not None:
+        on_status("Saved for the next scan: " + _ingest_summary(counts) + ".")
 
 
 class DockerScanController:

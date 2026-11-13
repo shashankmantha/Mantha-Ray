@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 from collections.abc import Iterable, Mapping
+from typing import NamedTuple
 from pathlib import Path
 from typing import Any
 
@@ -470,28 +471,42 @@ def _entries_from_case(case_dir: Path) -> list[dict[str, Any]]:
     return entries, timeouts
 
 
-def ingest_case(case_dir: Path, root: Path | None = None) -> int:
-    """Add a finished case's complete capa and FLOSS results. Returns how many were new."""
+class IngestCounts(NamedTuple):
+    """What reading a case added to the cache."""
+
+    results: int = 0
+    timeouts: int = 0
+
+    def __bool__(self) -> bool:
+        return bool(self.results or self.timeouts)
+
+
+def ingest_case(case_dir: Path, root: Path | None = None) -> IngestCounts:
+    """Add a finished case's complete capa and FLOSS results, and its timeouts."""
 
     root = root or cache_home()
     if not CASE_ID_PATTERN.fullmatch(case_dir.name):
         raise CacheError("not a case folder")
     marker = root / "ingested" / case_dir.name
     if marker.exists():
-        return 0
+        return IngestCounts()
     entries, timeouts = _entries_from_case(case_dir)
     added = sum(_write_entry(root, entry) for entry in entries)
+    noted = 0
     for analyzer, sha256, limit in timeouts:
         try:
             _record_timeout(root, analyzer, sha256, case_dir.name, limit)
         except (OSError, CacheError):
             continue
+        noted += 1
     marker.parent.mkdir(parents=True, exist_ok=True)
     marker.touch()
-    return added
+    return IngestCounts(added, noted)
 
 
-def ingest_results_directory(results_directory: Path, root: Path | None = None) -> int:
+def ingest_results_directory(
+    results_directory: Path, root: Path | None = None,
+) -> IngestCounts:
     """Ingest the newest cases in a results folder that aren't in the cache yet.
 
     Covers scans whose window closed before they finished: their results are
@@ -507,16 +522,18 @@ def ingest_results_directory(results_directory: Path, root: Path | None = None) 
             reverse=True,
         )[:MAX_CASES_PER_INGEST]
     except OSError:
-        return 0
-    added = 0
+        return IngestCounts()
+    added = noted = 0
     for case_dir in cases:
         if (root / "ingested" / case_dir.name).exists() or not (case_dir / "report.json").is_file():
             continue
         try:
-            added += ingest_case(case_dir, root)
+            counts = ingest_case(case_dir, root)
         except (OSError, ValueError, UnicodeDecodeError):
             continue
-    return added
+        added += counts.results
+        noted += counts.timeouts
+    return IngestCounts(added, noted)
 
 
 def status(root: Path | None = None) -> dict[str, Any]:

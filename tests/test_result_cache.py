@@ -132,10 +132,12 @@ class CacheTests(unittest.TestCase):
             ],
             floss=[floss_result("v1/DoorKickers2.exe"), floss_result("v1/steam_api64.dll", PLAIN)],
         )
-        self.assertEqual(added, 2)
+        # Two results saved; the timed-out file is noted instead, not saved.
+        self.assertEqual(added, (2, 1))
         self.assertEqual(result_cache.status(self.cache)["entries"], {"capa": 1, "floss": 1})
         # The same case is never read twice.
-        self.assertEqual(result_cache.ingest_case(self.results / CASE, self.cache), 0)
+        self.assertEqual(result_cache.ingest_case(self.results / CASE, self.cache), (0, 0))
+        self.assertFalse(result_cache.ingest_case(self.results / CASE, self.cache))
 
     def test_round_trip(self) -> None:
         self.ingest(capa=[capa_result("v1/DoorKickers2.exe")], floss=[floss_result("v1/DoorKickers2.exe")])
@@ -189,14 +191,29 @@ class CacheTests(unittest.TestCase):
                    case_id="case-20261109T010000Z-00000001")
         (self.results / "not-a-case").mkdir()
         (self.results / "case-20261109T020000Z-00000002").symlink_to(self.results / CASE)
-        self.assertEqual(result_cache.ingest_results_directory(self.results, self.cache), 2)
-        self.assertEqual(result_cache.ingest_results_directory(self.results, self.cache), 0)
+        self.assertEqual(result_cache.ingest_results_directory(self.results, self.cache).results, 2)
+        self.assertFalse(result_cache.ingest_results_directory(self.results, self.cache))
 
     def test_clear_keeps_old_cases_out(self) -> None:
         self.ingest(capa=[capa_result("v1/DoorKickers2.exe")], floss=[])
         self.assertEqual(result_cache.clear(self.cache), 1)
-        self.assertEqual(result_cache.ingest_results_directory(self.results, self.cache), 0)
+        self.assertFalse(result_cache.ingest_results_directory(self.results, self.cache))
         self.assertEqual(result_cache.status(self.cache)["entries"], {"capa": 0, "floss": 0})
+
+
+class IngestMessageTests(unittest.TestCase):
+    """The scan log must say what was learned, results or timeouts."""
+
+    def test_summary_mentions_both_kinds(self) -> None:
+        from static_triage.container.controller import _ingest_summary
+
+        counts = result_cache.IngestCounts
+        self.assertEqual(_ingest_summary(counts(2, 0)),
+                         "2 capa/FLOSS results saved for reuse on identical files")
+        self.assertEqual(_ingest_summary(counts(0, 1)),
+                         "1 file that ran out of time noted for a larger limit")
+        self.assertIn(" and ", _ingest_summary(counts(3, 8)))
+        self.assertEqual(_ingest_summary(counts(0, 0)), "nothing new")
 
 
 class TimeoutEscalationTests(unittest.TestCase):
